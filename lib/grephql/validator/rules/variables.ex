@@ -3,6 +3,7 @@ defmodule Grephql.Validator.Rules.Variables do
 
   alias Grephql.Language.Document
   alias Grephql.Language.Field
+  alias Grephql.Language.FragmentSpread
   alias Grephql.Language.InlineFragment
   alias Grephql.Language.OperationDefinition
   alias Grephql.Language.SelectionSet
@@ -21,7 +22,7 @@ defmodule Grephql.Validator.Rules.Variables do
 
   defp validate_operation(op, ctx) do
     defined = collect_defined(op.variable_definitions)
-    used = collect_used(op.selection_set)
+    used = collect_used(op)
 
     ctx
     |> check_unique_definitions(op.variable_definitions)
@@ -74,7 +75,10 @@ defmodule Grephql.Validator.Rules.Variables do
 
   defp check_variable_types(ctx, op, defined, schema) do
     root_type_name = Helpers.root_type_name(schema, op.operation)
-    check_variable_types_in_selections(ctx, op.selection_set, root_type_name, defined, schema)
+
+    ctx
+    |> check_directive_arg_var_types(op.directives, defined, schema)
+    |> check_variable_types_in_selections(op.selection_set, root_type_name, defined, schema)
   end
 
   defp check_variable_types_in_selections(ctx, nil, _type_name, _defined, _schema), do: ctx
@@ -102,19 +106,31 @@ defmodule Grephql.Validator.Rules.Variables do
 
   defp check_selection_var_types(ctx, %Field{} = field, type_name, defined, schema)
        when is_binary(type_name) do
-    ctx = check_field_arg_var_types(ctx, field, type_name, defined, schema)
+    ctx =
+      ctx
+      |> check_field_arg_var_types(field, type_name, defined, schema)
+      |> check_directive_arg_var_types(field.directives, defined, schema)
 
     child_type_name = Helpers.resolve_field_type(schema, type_name, field.name)
     check_variable_types_in_selections(ctx, field.selection_set, child_type_name, defined, schema)
   end
 
   defp check_selection_var_types(ctx, %Field{} = field, nil, defined, schema) do
-    check_variable_types_in_selections(ctx, field.selection_set, nil, defined, schema)
+    ctx
+    |> check_directive_arg_var_types(field.directives, defined, schema)
+    |> check_variable_types_in_selections(field.selection_set, nil, defined, schema)
   end
 
   defp check_selection_var_types(ctx, %InlineFragment{} = frag, _type_name, defined, schema) do
     frag_type = if frag.type_condition, do: frag.type_condition.name, else: nil
-    check_variable_types_in_selections(ctx, frag.selection_set, frag_type, defined, schema)
+
+    ctx
+    |> check_directive_arg_var_types(frag.directives, defined, schema)
+    |> check_variable_types_in_selections(frag.selection_set, frag_type, defined, schema)
+  end
+
+  defp check_selection_var_types(ctx, %FragmentSpread{} = spread, _type_name, defined, schema) do
+    check_directive_arg_var_types(ctx, spread.directives, defined, schema)
   end
 
   defp check_selection_var_types(ctx, _selection, _type_name, _defined, _schema), do: ctx
@@ -129,6 +145,24 @@ defmodule Grephql.Validator.Rules.Variables do
       :error ->
         ctx
     end
+  end
+
+  defp check_directive_arg_var_types(ctx, directives, defined, schema) do
+    Enum.reduce(directives, ctx, fn directive, acc ->
+      case Schema.get_directive(schema, directive.name) do
+        {:ok, schema_directive} ->
+          check_directive_args(acc, directive.arguments, schema_directive.args, defined)
+
+        :error ->
+          acc
+      end
+    end)
+  end
+
+  defp check_directive_args(ctx, arguments, schema_args, defined) do
+    Enum.reduce(arguments, ctx, fn arg, acc ->
+      check_arg_var_type(acc, arg, schema_args, defined)
+    end)
   end
 
   defp check_arg_var_type(ctx, arg, schema_args, defined) do
@@ -192,8 +226,10 @@ defmodule Grephql.Validator.Rules.Variables do
     Map.new(var_defs, fn %VariableDefinition{variable: var} = vd -> {var.name, vd} end)
   end
 
-  defp collect_used(selection_set) do
-    collect_used_vars(selection_set, [])
+  defp collect_used(%OperationDefinition{} = op) do
+    op.selection_set
+    |> collect_used_vars([])
+    |> collect_directive_vars(op.directives)
   end
 
   defp collect_used_vars(nil, acc), do: acc
@@ -203,12 +239,21 @@ defmodule Grephql.Validator.Rules.Variables do
   end
 
   defp collect_selection_vars(%Field{} = field, acc) do
-    acc = Enum.reduce(field.arguments, acc, &collect_arg_vars/2)
+    acc =
+      field.arguments
+      |> Enum.reduce(acc, &collect_arg_vars/2)
+      |> collect_directive_vars(field.directives)
+
     collect_used_vars(field.selection_set, acc)
   end
 
   defp collect_selection_vars(%InlineFragment{} = frag, acc) do
+    acc = collect_directive_vars(acc, frag.directives)
     collect_used_vars(frag.selection_set, acc)
+  end
+
+  defp collect_selection_vars(%FragmentSpread{} = spread, acc) do
+    collect_directive_vars(acc, spread.directives)
   end
 
   defp collect_selection_vars(_selection, acc), do: acc
@@ -218,6 +263,12 @@ defmodule Grephql.Validator.Rules.Variables do
       %Variable{} = var -> [var | acc]
       _other -> acc
     end
+  end
+
+  defp collect_directive_vars(acc, directives) do
+    Enum.reduce(directives, acc, fn directive, directive_acc ->
+      Enum.reduce(directive.arguments, directive_acc, &collect_arg_vars/2)
+    end)
   end
 
   defp type_ref_to_string(%Grephql.Language.NonNullType{type: inner}),

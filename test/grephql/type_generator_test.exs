@@ -19,6 +19,9 @@ defmodule Grephql.TypeGeneratorTest do
               Grephql.Test.NoDupTypename.GetNode.Result.Node.User,
               Grephql.Test.NoPK.GetUser.Result.User,
               Grephql.Test.NonNull.GetUser.Result.User,
+              Grephql.Test.ObjectInlineFrag.GetUser.Result.User,
+              Grephql.Test.ResultRoot.GetUser.Result,
+              Grephql.Test.ResultRoot.GetUser.Result.User,
               Grephql.Test.Union.Search.Result.Search.Post,
               Grephql.Test.Union.Search.Result.Search.User,
               Grephql.Test.UnionField.Search.Result.Result
@@ -74,6 +77,41 @@ defmodule Grephql.TypeGeneratorTest do
       user = struct(Grephql.Test.Nullable.GetUser.Result.User)
       assert user.name == nil
       assert user.email == nil
+    end
+  end
+
+  describe "generated module list" do
+    test "first returned module is the operation Result root" do
+      schema = SchemaHelper.build_schema()
+      operation = parse!("query { user(id: \"1\") { name email } }")
+
+      modules =
+        TypeGenerator.generate(operation, schema,
+          client_module: Grephql.Test.ResultRoot,
+          function_name: :get_user
+        )
+
+      # Compiler.compile_document!/4 uses hd(output_modules) as the decode root.
+      assert hd(modules) == Grephql.Test.ResultRoot.GetUser.Result
+    end
+  end
+
+  describe "inline fragment on an object parent" do
+    test "abstract-typed inline fragment with a nested fragment flattens without crashing" do
+      schema = schema_object_with_interface()
+      operation = parse!("query { user(id: \"1\") { ... on Node { id ... { name } } } }")
+
+      modules =
+        TypeGenerator.generate(operation, schema,
+          client_module: Grephql.Test.ObjectInlineFrag,
+          function_name: :get_user
+        )
+
+      assert Grephql.Test.ObjectInlineFrag.GetUser.Result.User in modules
+
+      fields = Grephql.Test.ObjectInlineFrag.GetUser.Result.User.__schema__(:fields)
+      assert :id in fields
+      assert :name in fields
     end
   end
 
@@ -702,6 +740,53 @@ defmodule Grephql.TypeGeneratorTest do
         "Shop" => %Type{
           kind: :object,
           name: "Shop",
+          interfaces: ["Node"],
+          fields: %{
+            "id" => %SchemaField{
+              name: "id",
+              type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :scalar, name: "ID"}}
+            },
+            "name" => %SchemaField{
+              name: "name",
+              type: %TypeRef{kind: :scalar, name: "String"}
+            }
+          }
+        }
+      })
+
+    SchemaHelper.build_schema(types: types)
+  end
+
+  # Object parent (User) whose selection uses an inline fragment on an
+  # interface it implements. Exercises the object-mode flattening path where a
+  # nested inline fragment must not leak into resolve_object/5.
+  defp schema_object_with_interface do
+    types =
+      Map.merge(SchemaHelper.default_types(), %{
+        "Query" => %Type{
+          kind: :object,
+          name: "Query",
+          fields: %{
+            "user" => %SchemaField{
+              name: "user",
+              type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :object, name: "User"}}
+            }
+          }
+        },
+        "Node" => %Type{
+          kind: :interface,
+          name: "Node",
+          fields: %{
+            "id" => %SchemaField{
+              name: "id",
+              type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :scalar, name: "ID"}}
+            }
+          },
+          possible_types: ["User"]
+        },
+        "User" => %Type{
+          kind: :object,
+          name: "User",
           interfaces: ["Node"],
           fields: %{
             "id" => %SchemaField{

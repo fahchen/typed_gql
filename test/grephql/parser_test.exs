@@ -205,11 +205,21 @@ defmodule Grephql.ParserTest do
              } = name_field
     end
 
-    test "operation with directive" do
+    test "query operation with directive" do
       input = "query @cached { user { name } }"
 
       assert {:ok, %Language.Document{definitions: [op]}} = Parser.parse(input)
+      assert op.operation == :query
       assert [%Language.Directive{name: "cached"}] = op.directives
+    end
+
+    test "mutation operation with directive" do
+      input = "mutation CreateUser @audit { createUser(input: {name: \"Alice\"}) { id } }"
+
+      assert {:ok, %Language.Document{definitions: [op]}} = Parser.parse(input)
+      assert op.operation == :mutation
+      assert op.name == "CreateUser"
+      assert [%Language.Directive{name: "audit"}] = op.directives
     end
   end
 

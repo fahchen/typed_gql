@@ -50,6 +50,25 @@ defmodule Grephql.IntegrationTest do
     }
     """)
 
+    defgql(:get_user_optional_email, """
+    query GetUserOptionalEmail($id: ID!, $showEmail: Boolean!) {
+      user(id: $id) {
+        id
+        name
+        email @include(if: $showEmail)
+      }
+    }
+    """)
+
+    defgql(:get_user_optional_id, """
+    query GetUserOptionalId($userId: ID!, $showId: Boolean!) {
+      user(id: $userId) {
+        id @include(if: $showId)
+        name
+      }
+    }
+    """)
+
     defgql(:list_users, """
     query ListUsers {
       users { id name role }
@@ -265,6 +284,104 @@ defmodule Grephql.IntegrationTest do
       assert {:ok, %Result{} = result} = Client.get_user(%{id: "1"}, req_options: req_options())
 
       assert result.data.user.profile == nil
+    end
+  end
+
+  describe "directives" do
+    test "include directive sends the control variable and decodes an omitted field as nil" do
+      Req.Test.expect(Client, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        request = Jason.decode!(body)
+
+        assert request["operationName"] == "GetUserOptionalEmail"
+        assert request["query"] =~ "email @include(if: $showEmail)"
+        assert request["variables"] == %{"id" => "1", "showEmail" => false}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "user" => %{
+                "id" => "1",
+                "name" => "Alice"
+              }
+            }
+          })
+        )
+      end)
+
+      assert {:ok, %Result{} = result} =
+               Client.get_user_optional_email(%{id: "1", show_email: false},
+                 req_options: req_options()
+               )
+
+      assert result.data.user.name == "Alice"
+      assert result.data.user.email == nil
+    end
+
+    test "include directive decodes the field when the server returns it" do
+      Req.Test.expect(Client, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        request = Jason.decode!(body)
+
+        assert request["variables"] == %{"id" => "1", "showEmail" => true}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "user" => %{
+                "id" => "1",
+                "name" => "Alice",
+                "email" => "alice@example.com"
+              }
+            }
+          })
+        )
+      end)
+
+      assert {:ok, %Result{} = result} =
+               Client.get_user_optional_email(%{id: "1", show_email: true},
+                 req_options: req_options()
+               )
+
+      assert result.data.user.email == "alice@example.com"
+    end
+
+    test "include directive can omit a non-null field without response validation failing" do
+      Req.Test.expect(Client, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        request = Jason.decode!(body)
+
+        assert request["operationName"] == "GetUserOptionalId"
+        assert request["query"] =~ "id @include(if: $showId)"
+        assert request["variables"] == %{"userId" => "1", "showId" => false}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "data" => %{
+              "user" => %{
+                "name" => "Alice"
+              }
+            }
+          })
+        )
+      end)
+
+      assert {:ok, %Result{} = result} =
+               Client.get_user_optional_id(%{user_id: "1", show_id: false},
+                 req_options: req_options()
+               )
+
+      assert result.data.user.name == "Alice"
+      assert result.data.user.id == nil
     end
   end
 

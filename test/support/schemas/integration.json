@@ -529,7 +529,34 @@
         {"kind": "SCALAR", "name": "Float", "description": null, "fields": null, "inputFields": null, "interfaces": null, "enumValues": null, "possibleTypes": null},
         {"kind": "SCALAR", "name": "DateTime", "description": null, "fields": null, "inputFields": null, "interfaces": null, "enumValues": null, "possibleTypes": null}
       ],
-      "directives": []
+      "directives": [
+        {
+          "name": "skip",
+          "description": "Skip this field when the if argument is true.",
+          "locations": ["FIELD", "FRAGMENT_SPREAD", "INLINE_FRAGMENT"],
+          "args": [
+            {
+              "name": "if",
+              "description": "Skipped when true.",
+              "type": {"kind": "NON_NULL", "name": null, "ofType": {"kind": "SCALAR", "name": "Boolean", "ofType": null}},
+              "defaultValue": null
+            }
+          ]
+        },
+        {
+          "name": "include",
+          "description": "Include this field when the if argument is true.",
+          "locations": ["FIELD", "FRAGMENT_SPREAD", "INLINE_FRAGMENT"],
+          "args": [
+            {
+              "name": "if",
+              "description": "Included when true.",
+              "type": {"kind": "NON_NULL", "name": null, "ofType": {"kind": "SCALAR", "name": "Boolean", "ofType": null}},
+              "defaultValue": null
+            }
+          ]
+        }
+      ]
     }
   }
 }

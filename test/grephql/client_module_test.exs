@@ -1,3 +1,21 @@
+defmodule Grephql.ClientModuleGenerationPlugin do
+  @moduledoc false
+  use Grephql.Generation.Plugin
+
+  alias Grephql.Generation.Field
+  alias Grephql.Generation.Schema
+
+  # Forces every `name` field nullable, proving a user plugin reaches the
+  # generation pipeline through `use Grephql`'s `:generation_plugins` option.
+  @impl Grephql.Generation.Plugin
+  def after_resolve(tree, _context) do
+    Schema.map_fields(tree, fn
+      %Field{name: :name} = field -> Field.put_nullable(field, true)
+      field -> field
+    end)
+  end
+end
+
 defmodule Grephql.ClientModuleTest do
   use ExUnit.Case, async: true
 
@@ -81,6 +99,38 @@ defmodule Grephql.ClientModuleTest do
       schema2 = Grephql.__load_schema__("../support/schemas/minimal.json", __ENV__.file)
 
       assert schema1 == schema2
+    end
+  end
+
+  describe "use Grephql with generation_plugins" do
+    defmodule PluginClient do
+      use Grephql,
+        otp_app: :grephql,
+        source: "../support/schemas/integration.json",
+        endpoint: "https://api.example.com/graphql",
+        generation_plugins: [Grephql.ClientModuleGenerationPlugin]
+
+      defgql(:get_user, """
+      query GetUser($id: ID!) {
+        user(id: $id) { id name }
+      }
+      """)
+    end
+
+    test "compiles the client and generates the response modules" do
+      assert function_exported?(PluginClient, :get_user, 2)
+
+      # The generated response module exists and decodes responses. A user
+      # plugin running during generation (forcing `name` nullable) must not
+      # break generation or decoding.
+      result =
+        Grephql.ResponseDecoder.decode!(
+          PluginClient.GetUser.Result,
+          %{"user" => %{"id" => "1", "name" => "Alice"}}
+        )
+
+      assert result.user.id == "1"
+      assert result.user.name == "Alice"
     end
   end
 end

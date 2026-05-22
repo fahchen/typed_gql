@@ -19,6 +19,7 @@ defmodule Grephql.Compiler do
           | {:scalar_types, map()}
           | {:caller_env, Macro.Env.t()}
           | {:fragments, %{String.t() => fragment_entry()}}
+          | {:generation_plugins, [module()]}
 
   @type fragment_entry() :: %{
           source: String.t(),
@@ -78,7 +79,8 @@ defmodule Grephql.Compiler do
       client_module: client_module,
       function_name: Keyword.fetch!(opts, :function_name),
       scalar_types: Keyword.get(opts, :scalar_types, %{}),
-      fragments: fragments
+      fragments: fragments,
+      generation_plugins: Keyword.get(opts, :generation_plugins, [])
     ]
 
     output_modules = TypeGenerator.generate(operation, schema, generator_opts)
@@ -130,8 +132,16 @@ defmodule Grephql.Compiler do
 
     client_module = Keyword.fetch!(opts, :client_module)
     scalar_types = Keyword.get(opts, :scalar_types, %{})
+    generation_plugins = Keyword.get(opts, :generation_plugins, [])
 
-    result_module = TypeGenerator.generate_fragment(fragment, schema, client_module, scalar_types)
+    result_module =
+      TypeGenerator.generate_fragment(
+        fragment,
+        schema,
+        client_module,
+        scalar_types,
+        generation_plugins
+      )
 
     %{
       source: String.trim(fragment_string),
