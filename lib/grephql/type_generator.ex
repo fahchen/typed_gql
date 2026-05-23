@@ -195,9 +195,19 @@ defmodule Grephql.TypeGenerator do
   end
 
   defp normalize_union_selections(selections, parent_type_name, context) do
-    Enum.map(selections, fn
+    Enum.flat_map(selections, fn
       %QueryField{} = field ->
-        normalize_field(field, parent_type_name, context)
+        [normalize_field(field, parent_type_name, context)]
+
+      # An inline fragment without a type condition is valid GraphQL. On a
+      # union/interface parent its members are shared across every variant, not
+      # a variant of their own, so hoist them (directives propagated) into the
+      # shared selection. This also keeps resolve_union/4 free of type-condition
+      # -less fragments, which it cannot turn into a variant module.
+      %InlineFragment{type_condition: nil} = fragment ->
+        fragment.selection_set.selections
+        |> prepend_directives(fragment.directives)
+        |> normalize(parent_type_name, context)
 
       %InlineFragment{} = fragment ->
         normalized =
@@ -205,7 +215,7 @@ defmodule Grephql.TypeGenerator do
           |> prepend_directives(fragment.directives)
           |> normalize(fragment.type_condition.name, context)
 
-        %{fragment | selection_set: %{fragment.selection_set | selections: normalized}}
+        [%{fragment | selection_set: %{fragment.selection_set | selections: normalized}}]
     end)
   end
 

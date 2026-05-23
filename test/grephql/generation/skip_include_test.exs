@@ -156,6 +156,23 @@ defmodule Grephql.Generation.SkipIncludeTest do
       # Post variant has no directive: its non-null id stays non-null.
       assert field(post_variant, :id).resolved.nullable == false
     end
+
+    test "untyped inline fragment on a union does not crash and is hoisted to shared fields" do
+      schema = schema_with_union()
+
+      root =
+        resolve_root(
+          ~s|query Q($show: Boolean!) { search { ... @include(if: $show) { __typename } ... on User { id email } ... on Post { id title } } }|,
+          Grephql.Test.SkipInclude.UnionUntyped,
+          :q,
+          schema: schema
+        )
+
+      union = union_child(root)
+      # No crash on the type-condition-less fragment; both typed variants build.
+      assert Enum.find(union.children, &(&1.parent_type == "User"))
+      assert Enum.find(union.children, &(&1.parent_type == "Post"))
+    end
   end
 
   describe "field-level directive does not propagate into sub-selection" do
