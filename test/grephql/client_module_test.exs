@@ -2,20 +2,26 @@ defmodule Grephql.ClientModuleGenerationPlugin do
   @moduledoc false
   use Grephql.Generation.Plugin
 
+  alias Grephql.Generation.Field
   alias Grephql.Generation.Schema
 
-  # Drops every `name` field. Forced nullability is invisible at runtime
-  # (typespecs are not introspectable on generated modules), so this plugin
-  # makes an observable change instead: when it reaches the generation pipeline
-  # via use Grephql's :generation_plugins, the generated struct lacks :name.
+  # Renames every `name` field to `display_name`. A rename is observable at
+  # runtime — the decoded struct exposes the new key, sourced from the original
+  # "name" — unlike forced nullability, whose effect lives only in the @type
+  # (not introspectable on generated modules). Proves a user plugin reaches the
+  # pipeline via use Grephql's :generation_plugins.
   @impl Grephql.Generation.Plugin
-  def after_resolve(tree, _context), do: drop_name(tree)
+  def after_resolve(tree, _context), do: rename(tree)
 
-  defp drop_name(%Schema{} = node) do
+  defp rename(%Schema{} = node) do
     %{
       node
-      | fields: Enum.reject(node.fields, &(&1.name == :name)),
-        children: Enum.map(node.children, &drop_name/1)
+      | fields:
+          Enum.map(node.fields, fn
+            %Field{name: :name} = field -> %{field | name: :display_name}
+            field -> field
+          end),
+        children: Enum.map(node.children, &rename/1)
     }
   end
 end
@@ -131,9 +137,11 @@ defmodule Grephql.ClientModuleTest do
         )
 
       assert result.user.id == "1"
-      # The plugin dropped :name during generation, so the struct has no such
-      # key (the unknown `name` in the payload is ignored). If :generation_plugins
-      # were not wired through, :name would still be present and this would fail.
+      # The plugin renamed :name -> :display_name during generation; the field
+      # is sourced from the original "name" key, so the value still decodes. If
+      # :generation_plugins were not wired through, the struct would expose
+      # :name instead and this would fail.
+      assert result.user.display_name == "Alice"
       refute Map.has_key?(result.user, :name)
     end
   end

@@ -34,7 +34,7 @@ defmodule Grephql.Generation.SkipIncludeTest do
     end
   end
 
-  defmodule ForceNullablePlugin do
+  defmodule RenameFieldPlugin do
     @moduledoc false
     use Grephql.Generation.Plugin
 
@@ -43,8 +43,9 @@ defmodule Grephql.Generation.SkipIncludeTest do
 
     @impl Grephql.Generation.Plugin
     def after_resolve(tree, _context) do
-      Schema.map_fields(tree, fn %Field{} = field ->
-        if field.name == :name, do: Field.put_nullable(field, true), else: field
+      Schema.map_fields(tree, fn
+        %Field{name: :name} = field -> %{field | name: :display_name}
+        field -> field
       end)
     end
   end
@@ -278,19 +279,19 @@ defmodule Grephql.Generation.SkipIncludeTest do
   end
 
   describe "user generation_plugins" do
-    test "a user plugin can transform a field (force nullable)" do
+    test "a user plugin can transform a field (rename it)" do
       tree =
         resolve_tree(
           ~s|query Q { user(id: "1") { id name } }|,
           Grephql.Test.SkipInclude.UserPlugin,
           :q,
-          generation_plugins: [ForceNullablePlugin]
+          generation_plugins: [RenameFieldPlugin]
         )
 
-      # name forced nullable by the user plugin (it was schema-nullable anyway,
-      # but the plugin proves it can mutate the resolved field)
-      assert field(tree, :name).resolved.nullable == true
-      # id stays non-null (no directive, user plugin only touches :name)
+      # The user plugin renamed :name -> :display_name in the resolved tree.
+      assert field(tree, :display_name)
+      refute Enum.any?(tree.user.fields, &(&1.name == :name))
+      # id is untouched.
       refute nullable?(tree, :id)
     end
   end
@@ -303,7 +304,11 @@ defmodule Grephql.Generation.SkipIncludeTest do
     schema = Keyword.get_lazy(opts, :schema, &SchemaHelper.build_schema/0)
     operation = parse!(query)
 
-    plugins = [CapturePlugin | Keyword.get(opts, :generation_plugins, [])]
+    # CapturePlugin must run last so it observes the fully-transformed tree
+    # (after the built-in SkipInclude and any user generation_plugins). Order
+    # matters, so a prepend won't do; the list is tiny so the append is fine.
+    # credo:disable-for-next-line Credo.Check.Refactor.AppendSingleItem
+    plugins = Keyword.get(opts, :generation_plugins, []) ++ [CapturePlugin]
 
     TypeGenerator.generate(operation, schema,
       client_module: client_module,
