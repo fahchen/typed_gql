@@ -5,6 +5,27 @@ defmodule Grephql.TypeGenerator do
   Given an operation definition and a schema, generates per-query output type
   modules with proper nesting, nullability, and field alias support.
 
+  ## Generation pipeline
+
+  Generation runs as four named steps. Lifecycle plugins
+  (`Grephql.Generation.Plugin`) hook the first three via `after_normalize`,
+  `after_resolve`, and `after_lower` (plus `before_normalize` for the raw
+  entry); the terminal `create` step compiles modules and is not hookable:
+
+    1. `normalize` — raw selections to canonical selections: expands fragment
+       spreads, flattens inline fragments on object types, and propagates
+       ancestor (inline-fragment / fragment-spread) directives down onto each
+       field's `directives`.
+    2. `resolve` — canonical selections + schema to a
+       `Grephql.Generation.Schema` tree. The whole tree is built before any
+       lowering.
+    3. `lower` — tree to `{module, quoted_ast}` pairs.
+    4. `create` — `{module, ast}` pairs to BEAM modules.
+
+  Grephql always runs its built-in plugins (currently
+  `Grephql.Generation.Plugins.SkipInclude` for `@include`/`@skip`) before any
+  user plugins supplied via the `:generation_plugins` option.
+
   ## Naming convention
 
   Output types follow per-query path naming under a `Result` namespace:
@@ -21,6 +42,10 @@ defmodule Grephql.TypeGenerator do
   Ecto Type handles `__typename`-based dispatch during deserialization.
   """
 
+  alias Grephql.Generation.Context
+  alias Grephql.Generation.Field, as: GenField
+  alias Grephql.Generation.Plugins.SkipInclude
+  alias Grephql.Generation.Schema, as: GenSchema
   alias Grephql.GeneratorHelpers
   alias Grephql.Language.Field, as: QueryField
   alias Grephql.Language.FragmentSpread
@@ -29,11 +54,14 @@ defmodule Grephql.TypeGenerator do
   alias Grephql.TypeMapper
   alias Grephql.Validator.Helpers
 
+  @builtin_plugins [SkipInclude]
+
   @type option() ::
           {:client_module, module()}
           | {:function_name, atom()}
           | {:scalar_types, map()}
           | {:fragments, map()}
+          | {:generation_plugins, [module()]}
 
   @doc """
   Generates embedded schema modules for an operation's output types.
@@ -45,149 +73,332 @@ defmodule Grephql.TypeGenerator do
     - `:client_module` — the parent client module (e.g., `MyApp.UserService`)
     - `:function_name` — the defgql function name (e.g., `:get_user`)
     - `:scalar_types` — custom scalar type mappings (default: `%{}`)
+    - `:fragments` — named fragment entries for spread expansion (default: `%{}`)
+    - `:generation_plugins` — user `Grephql.Generation.Plugin` modules,
+      appended after the built-in plugins (default: `[]`)
   """
   @spec generate(Grephql.Language.OperationDefinition.t(), Schema.t(), [option()]) :: [module()]
   def generate(operation, schema, opts) do
     client_module = Keyword.fetch!(opts, :client_module)
     function_name = Keyword.fetch!(opts, :function_name)
-    scalar_types = Keyword.get(opts, :scalar_types, %{})
-    fragments = Keyword.get(opts, :fragments, %{})
 
     # Module names derived from schema at compile time
     # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
     base_module = Module.concat([client_module, GeneratorHelpers.camelize(function_name), Result])
 
     root_type_name = Helpers.root_type_name(schema, operation.operation)
-    context = {schema, scalar_types, fragments}
 
-    {result, module_asts} =
-      collect_selections(operation.selection_set.selections, root_type_name, base_module, context)
-
-    GeneratorHelpers.create_modules(module_asts)
-
-    unwrap_module_names(result)
+    operation.selection_set.selections
+    |> run_pipeline(root_type_name, base_module, build_context(schema, opts), plugins(opts))
+    |> unwrap_module_names()
   end
 
   @doc """
   Generates an embedded schema module for a named fragment under
   `ClientModule.Fragments.FragmentName`.
   """
-  @spec generate_fragment(Grephql.Language.Fragment.t(), Schema.t(), module(), map()) :: module()
-  def generate_fragment(fragment, schema, client_module, scalar_types) do
+  @spec generate_fragment(Grephql.Language.Fragment.t(), Schema.t(), module(), map(), [module()]) ::
+          module()
+  def generate_fragment(fragment, schema, client_module, scalar_types, generation_plugins \\ []) do
     # Fragment module names from schema, bounded set
     # credo:disable-for-lines:2 Credo.Check.Warning.UnsafeToAtom
     base_module =
       Module.concat([client_module, Fragments, GeneratorHelpers.camelize(fragment.name)])
 
     type_name = fragment.type_condition.name
-    context = {schema, scalar_types, %{}}
+    context = build_context(schema, scalar_types: scalar_types)
 
-    {_result, module_asts} =
-      collect_selections(fragment.selection_set.selections, type_name, base_module, context)
-
-    GeneratorHelpers.create_modules(module_asts)
+    run_pipeline(
+      fragment.selection_set.selections,
+      type_name,
+      base_module,
+      context,
+      plugins(generation_plugins: generation_plugins)
+    )
 
     base_module
   end
 
-  # Collects module ASTs without creating them. Returns:
-  #   - For objects: {[module_name, ...], [{mod, ast}, ...]}
-  #   - For unions:  {{union_module, [module_name, ...]}, [{mod, ast}, ...]}
-  defp collect_selections(
-         selections,
-         parent_type_name,
-         parent_module,
-         {schema, _scalar_types, _fragments} = context
-       ) do
-    selections = expand_fragment_spreads(selections, context)
+  defp build_context(schema, opts) do
+    %Context{
+      schema: schema,
+      scalar_types: Keyword.get(opts, :scalar_types, %{}),
+      fragments: Keyword.get(opts, :fragments, %{})
+    }
+  end
 
-    case Schema.get_type(schema, parent_type_name) do
-      {:ok, %{kind: kind}} when kind in [:union, :interface] ->
-        {shared_fields, inline_fragments} =
-          Enum.split_with(selections, &match?(%QueryField{}, &1))
+  defp plugins(opts) do
+    @builtin_plugins ++ Keyword.get(opts, :generation_plugins, [])
+  end
 
-        case inline_fragments do
-          [] ->
-            collect_object_schema(shared_fields, parent_type_name, parent_module, context)
+  # Runs the full generation pipeline and returns the tree's module result.
+  defp run_pipeline(selections, parent_type_name, parent_module, context, plugins) do
+    canonical =
+      selections
+      |> run_after(plugins, :before_normalize, context)
+      |> normalize(parent_type_name, context)
+      |> run_after(plugins, :after_normalize, context)
 
-          _fragments ->
-            collect_union_schemas(shared_fields, inline_fragments, parent_module, context)
-        end
+    tree =
+      canonical
+      |> resolve(parent_type_name, parent_module, context)
+      |> run_after(plugins, :after_resolve, context)
 
-      _other ->
-        selections
-        |> flatten_inline_fragments()
-        |> collect_object_schema(parent_type_name, parent_module, context)
+    create_union_modules(tree)
+
+    tree
+    |> lower()
+    |> run_after(plugins, :after_lower, context)
+    |> GeneratorHelpers.create_modules()
+
+    tree
+  end
+
+  defp run_after(value, plugins, callback, context) do
+    Enum.reduce(plugins, value, fn plugin, acc ->
+      apply(plugin, callback, [acc, context])
+    end)
+  end
+
+  # ── normalize ──────────────────────────────────────────────────────────
+
+  # Produces canonical selections: fragment spreads expanded, inline fragments
+  # on object types flattened, and ancestor fragment directives propagated onto
+  # each field. For union/interface parents, inline fragments are kept (so the
+  # resolve step can build per-variant modules) with their directives already
+  # propagated onto member fields.
+  defp normalize(selections, parent_type_name, context) do
+    selections = expand_spreads(selections, context)
+
+    if union_or_interface?(context.schema, parent_type_name) do
+      normalize_union_selections(selections, parent_type_name, context)
+    else
+      normalize_object_selections(selections, parent_type_name, context)
     end
   end
 
-  defp expand_fragment_spreads(selections, {_schema, _scalar_types, fragments} = context) do
+  defp normalize_object_selections(selections, parent_type_name, context) do
     Enum.flat_map(selections, fn
-      %FragmentSpread{name: name} ->
-        case Map.fetch(fragments, name) do
+      %QueryField{} = field ->
+        [normalize_field(field, parent_type_name, context)]
+
+      %InlineFragment{} = fragment ->
+        # Object parents resolve to a single concrete type, so an inline
+        # fragment's members merge into the parent (resolved against
+        # parent_type_name) rather than producing union variants. Recursing in
+        # object mode keeps the result flat — only QueryFields — which
+        # resolve_object/5 requires.
+        fragment.selection_set.selections
+        |> prepend_directives(fragment.directives)
+        |> normalize(parent_type_name, context)
+    end)
+  end
+
+  defp normalize_union_selections(selections, parent_type_name, context) do
+    Enum.flat_map(selections, fn
+      %QueryField{} = field ->
+        [normalize_field(field, parent_type_name, context)]
+
+      # An inline fragment without a type condition is valid GraphQL. On a
+      # union/interface parent its members are shared across every variant, not
+      # a variant of their own, so hoist them (directives propagated) into the
+      # shared selection. This also keeps resolve_union/4 free of type-condition
+      # -less fragments, which it cannot turn into a variant module.
+      %InlineFragment{type_condition: nil} = fragment ->
+        fragment.selection_set.selections
+        |> prepend_directives(fragment.directives)
+        |> normalize(parent_type_name, context)
+
+      %InlineFragment{} = fragment ->
+        normalized =
+          fragment.selection_set.selections
+          |> prepend_directives(fragment.directives)
+          |> normalize(fragment.type_condition.name, context)
+
+        [%{fragment | selection_set: %{fragment.selection_set | selections: normalized}}]
+    end)
+  end
+
+  # Normalizes a field's own sub-selection set under its child type. A field's
+  # own directives are NOT propagated into its sub-selections — only fragment
+  # directives propagate to their members.
+  defp normalize_field(%QueryField{selection_set: nil} = field, _parent_type_name, _context),
+    do: field
+
+  defp normalize_field(%QueryField{} = field, parent_type_name, context) do
+    case Helpers.resolve_field_type(context.schema, parent_type_name, field.name) do
+      nil ->
+        field
+
+      child_type ->
+        normalized = normalize(field.selection_set.selections, child_type, context)
+        %{field | selection_set: %{field.selection_set | selections: normalized}}
+    end
+  end
+
+  defp expand_spreads(selections, context) do
+    Enum.flat_map(selections, fn
+      %FragmentSpread{name: name, directives: directives} ->
+        case Map.fetch(context.fragments, name) do
           {:ok, entry} ->
-            expand_fragment_spreads(entry.fragment.selection_set.selections, context)
+            entry.fragment.selection_set.selections
+            |> expand_spreads(context)
+            |> prepend_directives(directives)
 
           :error ->
             []
         end
-
-      %InlineFragment{} = fragment ->
-        [
-          %{
-            fragment
-            | selection_set: %{
-                fragment.selection_set
-                | selections: expand_fragment_spreads(fragment.selection_set.selections, context)
-              }
-          }
-        ]
 
       other ->
         [other]
     end)
   end
 
-  defp flatten_inline_fragments(selections) do
-    Enum.flat_map(selections, fn
-      %QueryField{} = field -> [field]
-      %InlineFragment{} = fragment -> flatten_inline_fragments(fragment.selection_set.selections)
+  defp prepend_directives(selections, []), do: selections
+
+  defp prepend_directives(selections, directives) do
+    Enum.map(selections, fn selection ->
+      Map.update!(selection, :directives, &(directives ++ &1))
     end)
   end
 
-  defp collect_object_schema(fields, parent_type_name, parent_module, context, opts \\ []) do
-    {schema, scalar_types, _fragments} = context
+  defp union_or_interface?(schema, type_name) do
+    match?(
+      {:ok, %{kind: kind}} when kind in [:union, :interface],
+      Schema.get_type(schema, type_name)
+    )
+  end
 
-    {field_defs, nested_modules, nested_asts} =
-      Enum.reduce(fields, {[], [], []}, fn %QueryField{} = field,
-                                           {defs_acc, mods_acc, asts_acc} ->
-        field_name = field_name(field)
+  # ── resolve ────────────────────────────────────────────────────────────
 
-        # Field names from GraphQL schema, bounded set
-        # credo:disable-for-lines:2 Credo.Check.Warning.UnsafeToAtom
-        atom_name =
-          field_name |> Macro.underscore() |> String.to_atom()
+  # Builds the generated-schema tree from canonical selections.
+  defp resolve(selections, parent_type_name, parent_module, context) do
+    if union_or_interface?(context.schema, parent_type_name) do
+      {shared_fields, inline_fragments} =
+        Enum.split_with(selections, &match?(%QueryField{}, &1))
 
-        schema_field = get_field!(schema, parent_type_name, field.name)
+      case inline_fragments do
+        [] ->
+          resolve_object(shared_fields, parent_type_name, parent_module, context)
 
-        resolved =
-          schema_field.type
-          |> TypeMapper.resolve(schema, scalar_types)
-          |> override_typename_type(field.name, opts)
+        _fragments ->
+          resolve_union(shared_fields, inline_fragments, parent_module, context)
+      end
+    else
+      resolve_object(selections, parent_type_name, parent_module, context)
+    end
+  end
 
-        {field_def, new_modules, new_asts} =
-          build_field_def(field, atom_name, field_name, resolved, parent_module, context)
+  defp resolve_object(fields, parent_type_name, parent_module, context, opts \\ []) do
+    {gen_fields, children} =
+      Enum.reduce(fields, {[], []}, fn %QueryField{} = field, {fields_acc, children_acc} ->
+        {gen_field, child} =
+          resolve_field(field, parent_type_name, parent_module, context, opts)
 
-        {[field_def | defs_acc], [new_modules | mods_acc], [new_asts | asts_acc]}
+        {[gen_field | fields_acc], maybe_prepend(child, children_acc)}
       end)
 
-    field_defs = :lists.reverse(field_defs)
-    parent_ast = build_embedded_schema_ast(parent_module, field_defs)
+    %GenSchema{
+      kind: :object,
+      module: parent_module,
+      parent_type: parent_type_name,
+      fields: :lists.reverse(gen_fields),
+      children: :lists.reverse(children)
+    }
+  end
 
-    module_names = [parent_module | List.flatten(:lists.reverse(nested_modules))]
-    all_asts = [parent_ast | List.flatten(:lists.reverse(nested_asts))]
+  defp maybe_prepend(nil, acc), do: acc
+  defp maybe_prepend(child, acc), do: [child | acc]
 
-    {module_names, all_asts}
+  defp resolve_field(%QueryField{} = field, parent_type_name, parent_module, context, opts) do
+    field_name = field_name(field)
+
+    # Field names from GraphQL schema, bounded set
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+    atom_name = field_name |> Macro.underscore() |> String.to_atom()
+
+    schema_field = get_field!(context.schema, parent_type_name, field.name)
+
+    resolved =
+      schema_field.type
+      |> TypeMapper.resolve(context.schema, context.scalar_types)
+      |> override_typename_type(field.name, opts)
+
+    base = %GenField{
+      kind: :field,
+      name: atom_name,
+      original_name: field_name,
+      resolved: resolved,
+      query_field: field,
+      schema_field: schema_field
+    }
+
+    case resolved.ecto_type do
+      {:object, type_name} ->
+        resolve_embed(:embeds_one, base, type_name, parent_module, context)
+
+      {:array, {:object, type_name}} ->
+        resolve_embed(:embeds_many, base, type_name, parent_module, context)
+
+      _scalar ->
+        {base, nil}
+    end
+  end
+
+  defp resolve_embed(kind, %GenField{} = base, type_name, parent_module, context) do
+    # Nested module names from schema field paths
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+    nested_module = Module.concat(parent_module, GeneratorHelpers.camelize(base.original_name))
+
+    child = resolve(base.query_field.selection_set.selections, type_name, nested_module, context)
+
+    gen_field =
+      case child do
+        # Union/interface: lower to a plain field carrying the parameterized
+        # Grephql.Types.Union type instead of an embeds_one/embeds_many embed.
+        %GenSchema{kind: :union, union_module: union_module} ->
+          ecto_type = if kind == :embeds_many, do: {:array, union_module}, else: union_module
+          %{base | resolved: %{base.resolved | ecto_type: ecto_type, enum_values: nil}}
+
+        %GenSchema{kind: :object, module: object_module} ->
+          %{base | kind: kind, embed_module: object_module}
+      end
+
+    {gen_field, child}
+  end
+
+  defp resolve_union(shared_fields, inline_fragments, parent_module, context) do
+    shared_fields = ensure_typename(shared_fields)
+    typename_values = Enum.map(inline_fragments, & &1.type_condition.name)
+
+    {typename_to_module, variants} =
+      Enum.reduce(inline_fragments, {%{}, []}, fn fragment, {type_map, variants_acc} ->
+        type_name = fragment.type_condition.name
+        merged_selections = shared_fields ++ fragment.selection_set.selections
+
+        # Fragment type names from schema, bounded set
+        # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+        fragment_module = Module.concat(parent_module, GeneratorHelpers.camelize(type_name))
+
+        variant =
+          resolve_object(merged_selections, type_name, fragment_module, context,
+            typename_values: typename_values
+          )
+
+        {Map.put(type_map, type_name, fragment_module), [variant | variants_acc]}
+      end)
+
+    # Union type module names derived from schema at compile time
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+    union_module = Module.concat(parent_module, "Union")
+
+    %GenSchema{
+      kind: :union,
+      module: parent_module,
+      union_module: union_module,
+      typename_to_module: typename_to_module,
+      children: :lists.reverse(variants)
+    }
   end
 
   # __typename is a meta-field available on all object types per the GraphQL spec,
@@ -213,42 +424,6 @@ defmodule Grephql.TypeGenerator do
     field
   end
 
-  defp collect_union_schemas(shared_fields, inline_fragments, parent_module, context) do
-    shared_fields = ensure_typename(shared_fields)
-    typename_values = Enum.map(inline_fragments, & &1.type_condition.name)
-
-    {typename_to_module, all_modules, all_asts} =
-      Enum.reduce(inline_fragments, {%{}, [], []}, fn fragment, {type_map, mods_acc, asts_acc} ->
-        type_name = fragment.type_condition.name
-        merged_selections = shared_fields ++ fragment.selection_set.selections
-
-        # Fragment type names from schema, bounded set
-        # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-        fragment_module = Module.concat(parent_module, GeneratorHelpers.camelize(type_name))
-
-        {fragment_modules, fragment_asts} =
-          collect_object_schema(merged_selections, type_name, fragment_module, context,
-            typename_values: typename_values
-          )
-
-        {Map.put(type_map, type_name, fragment_module), [fragment_modules | mods_acc],
-         [fragment_asts | asts_acc]}
-      end)
-
-    # Union type module names derived from schema at compile time
-    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-    union_module = Module.concat(parent_module, "Union")
-
-    # Union modules must be created eagerly because Ecto's __field__
-    # validates parameterized type modules exist at schema compile time.
-    Grephql.Types.Union.define(union_module, typename_to_module)
-
-    flat_modules = List.flatten(:lists.reverse(all_modules))
-    flat_asts = List.flatten(:lists.reverse(all_asts))
-
-    {{union_module, flat_modules}, flat_asts}
-  end
-
   defp ensure_typename(shared_fields) do
     if Enum.any?(shared_fields, &(&1.name == "__typename")) do
       shared_fields
@@ -267,77 +442,51 @@ defmodule Grephql.TypeGenerator do
 
   defp override_typename_type(resolved, _field_name, _opts), do: resolved
 
-  defp build_field_def(field, atom_name, field_name, resolved, parent_module, context) do
-    case resolved.ecto_type do
-      {:object, type_name} ->
-        build_embed(
-          :embeds_one,
-          field,
-          atom_name,
-          field_name,
-          type_name,
-          resolved,
-          parent_module,
-          context
-        )
+  # ── create (union types) ─────────────────────────────────────────────────
 
-      {:array, {:object, type_name}} ->
-        build_embed(
-          :embeds_many,
-          field,
-          atom_name,
-          field_name,
-          type_name,
-          resolved,
-          parent_module,
-          context
-        )
-
-      ecto_type ->
-        typed_opts = GeneratorHelpers.scalar_typed_opts(resolved)
-        source_opt = GeneratorHelpers.source_opt(atom_name, field_name)
-        enum_opts = GeneratorHelpers.enum_opts(resolved)
-        typename_opts = GeneratorHelpers.typename_opts(resolved)
-        opts = [{:typed, typed_opts} | source_opt] ++ enum_opts ++ typename_opts
-        {{:field, atom_name, ecto_type, opts}, [], []}
-    end
+  # Union/interface parameterized type modules must be created eagerly because
+  # Ecto's __field__ validates parameterized type modules exist at schema
+  # compile time, before lowered embedded-schema modules are created.
+  defp create_union_modules(%GenSchema{kind: :union} = node) do
+    Grephql.Types.Union.define(node.union_module, node.typename_to_module)
+    Enum.each(node.children, &create_union_modules/1)
   end
 
-  defp build_embed(
-         kind,
-         field,
-         atom_name,
-         field_name,
-         type_name,
-         resolved,
-         parent_module,
-         context
-       ) do
-    # Nested module names from schema field paths
-    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-    nested_module = Module.concat(parent_module, GeneratorHelpers.camelize(field_name))
+  defp create_union_modules(%GenSchema{kind: :object} = node) do
+    Enum.each(node.children, &create_union_modules/1)
+  end
 
-    {result, nested_asts} =
-      collect_selections(field.selection_set.selections, type_name, nested_module, context)
+  # ── lower ──────────────────────────────────────────────────────────────
 
-    source_opt = GeneratorHelpers.source_opt(atom_name, field_name)
+  # Lowers the tree into {module, quoted_ast} pairs, rebuilding each field's
+  # tuple/AST from its Generation.Field, so plugin nullability changes flow
+  # through naturally.
+  defp lower(%GenSchema{} = tree), do: lower(tree, [])
 
-    case result do
-      # Union/interface: use parameterized type field instead of embed
-      {union_module, nested_modules} ->
-        ecto_type = if kind == :embeds_many, do: {:array, union_module}, else: union_module
-        typed_opts = if resolved.nullable, do: [null: true], else: [null: false]
+  defp lower(%GenSchema{kind: :union} = node, acc) do
+    Enum.reduce(node.children, acc, &lower/2)
+  end
 
-        {{:field, atom_name, ecto_type, [{:typed, typed_opts} | source_opt]}, nested_modules,
-         nested_asts}
+  defp lower(%GenSchema{kind: :object} = node, acc) do
+    field_defs = Enum.map(node.fields, &lower_field/1)
+    ast = build_embedded_schema_ast(node.module, field_defs)
+    Enum.reduce(node.children, [ast | acc], &lower/2)
+  end
 
-      # Regular object: use embeds_one/embeds_many
-      [_nested_module | _rest] = nested_modules ->
-        typed_opts = GeneratorHelpers.embed_typed_opts(kind, resolved)
+  defp lower_field(%GenField{kind: :field} = field) do
+    resolved = field.resolved
+    typed_opts = GeneratorHelpers.scalar_typed_opts(resolved)
+    source_opt = GeneratorHelpers.source_opt(field.name, field.original_name)
+    enum_opts = GeneratorHelpers.enum_opts(resolved)
+    typename_opts = GeneratorHelpers.typename_opts(resolved)
+    opts = [{:typed, typed_opts} | source_opt] ++ enum_opts ++ typename_opts
+    {:field, field.name, resolved.ecto_type, opts}
+  end
 
-        {{kind, atom_name, nested_module, [{:typed, typed_opts} | source_opt]}, nested_modules,
-         nested_asts}
-    end
+  defp lower_field(%GenField{kind: kind} = field) when kind in [:embeds_one, :embeds_many] do
+    source_opt = GeneratorHelpers.source_opt(field.name, field.original_name)
+    typed_opts = GeneratorHelpers.embed_typed_opts(kind, field.resolved)
+    {kind, field.name, field.embed_module, [{:typed, typed_opts} | source_opt]}
   end
 
   defp build_embedded_schema_ast(module_name, field_defs) do
@@ -355,9 +504,20 @@ defmodule Grephql.TypeGenerator do
     {module_name, ast}
   end
 
-  # Extracts module name list from collect result
-  defp unwrap_module_names({_union_module, modules}), do: modules
-  defp unwrap_module_names(modules) when is_list(modules), do: modules
+  # Extracts the module name list from the generated tree, root-first and
+  # depth-first. The first entry is the operation's `Result` module, which the
+  # compiler uses as the response decode root.
+  defp unwrap_module_names(%GenSchema{} = tree) do
+    tree |> collect_module_names() |> List.flatten()
+  end
+
+  defp collect_module_names(%GenSchema{kind: :union} = node) do
+    Enum.map(node.children, &collect_module_names/1)
+  end
+
+  defp collect_module_names(%GenSchema{kind: :object} = node) do
+    [node.module | Enum.map(node.children, &collect_module_names/1)]
+  end
 
   defp field_name(%QueryField{alias: alias_name}) when is_binary(alias_name), do: alias_name
   defp field_name(%QueryField{name: name}), do: name

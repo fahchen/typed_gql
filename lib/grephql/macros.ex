@@ -307,7 +307,8 @@ defmodule Grephql.Macros do
                        function_name: func_name,
                        scalar_types: @grephql_scalars,
                        caller_env: __ENV__,
-                       fragments: grephql_fragments
+                       fragments: grephql_fragments,
+                       generation_plugins: @grephql_generation_plugins
                      )
 
       unquote(function_ast)

@@ -178,6 +178,12 @@ defmodule Grephql.Schema.ParserTest do
                                     "defaultValue" => nil
                                   }
                                 ]
+                              },
+                              %{
+                                "name" => "operationPolicy",
+                                "description" => "Applies policy checks to operations",
+                                "locations" => ["QUERY", "MUTATION"],
+                                "args" => []
                               }
                             ]
                           }
@@ -265,11 +271,14 @@ defmodule Grephql.Schema.ParserTest do
 
     test "parses directives" do
       {:ok, schema} = Parser.parse(@introspection_json)
-      assert [skip] = schema.directives
+      assert [skip, operation_policy] = schema.directives
       assert skip.name == "skip"
       assert skip.locations == [:field, :fragment_spread, :inline_fragment]
       assert %{"if" => if_arg} = skip.args
       assert if_arg.type.kind == :non_null
+
+      assert operation_policy.name == "operationPolicy"
+      assert operation_policy.locations == [:query, :mutation]
     end
 
     test "returns error for invalid JSON" do

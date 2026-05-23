@@ -41,6 +41,17 @@ defmodule Grephql.Validator.Rules.DirectivesTest do
     }
   }
 
+  @operation_directive %SchemaDirective{
+    name: "trace",
+    locations: [:query, :mutation],
+    args: %{
+      "enabled" => %InputValue{
+        name: "enabled",
+        type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :scalar, name: "Boolean"}}
+      }
+    }
+  }
+
   describe "directive existence" do
     test "known directive passes" do
       ctx = validate(~s|query { user(id: "1") { name @skip(if: true) } }|)
@@ -57,6 +68,24 @@ defmodule Grephql.Validator.Rules.DirectivesTest do
   describe "directive location" do
     test "directive on valid location passes" do
       ctx = validate(~s|query { user(id: "1") { name @skip(if: true) } }|)
+      assert errors(ctx) == []
+    end
+
+    test "directive on query operation passes when allowed on QUERY" do
+      ctx =
+        validate(~s|query @trace(enabled: true) { user(id: "1") { name } }|,
+          directives: [@operation_directive | default_directives()]
+        )
+
+      assert errors(ctx) == []
+    end
+
+    test "directive on mutation operation passes when allowed on MUTATION" do
+      ctx =
+        validate(~s|mutation @trace(enabled: false) { doThing }|,
+          directives: [@operation_directive | default_directives()]
+        )
+
       assert errors(ctx) == []
     end
 

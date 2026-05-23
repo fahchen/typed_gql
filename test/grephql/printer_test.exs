@@ -19,6 +19,16 @@ defmodule Grephql.PrinterTest do
              """
     end
 
+    test "query with operation directive" do
+      assert roundtrip("query GetUser @trace(enabled: true) { user { name } }") == """
+             query GetUser @trace(enabled: true) {
+               user {
+                 name
+               }
+             }\
+             """
+    end
+
     test "anonymous query (shorthand)" do
       assert roundtrip("{ user { name } }") == """
              {
@@ -45,6 +55,19 @@ defmodule Grephql.PrinterTest do
              ) ==
                """
                mutation CreateUser($input: CreateUserInput!) {
+                 createUser(input: $input) {
+                   id
+                 }
+               }\
+               """
+    end
+
+    test "mutation with operation directive" do
+      assert roundtrip(
+               "mutation CreateUser($input: CreateUserInput!) @audit { createUser(input: $input) { id } }"
+             ) ==
+               """
+               mutation CreateUser($input: CreateUserInput!) @audit {
                  createUser(input: $input) {
                    id
                  }

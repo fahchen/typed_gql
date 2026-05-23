@@ -1,6 +1,7 @@
 defmodule Grephql.Validator.Rules.VariablesTest do
   use ExUnit.Case, async: true
 
+  alias Grephql.Schema.Directive, as: SchemaDirective
   alias Grephql.Schema.Field, as: SchemaField
   alias Grephql.Schema.InputValue
   alias Grephql.Schema.Type
@@ -26,6 +27,16 @@ defmodule Grephql.Validator.Rules.VariablesTest do
   describe "unused variables" do
     test "all variables used passes" do
       ctx = validate("query($id: ID!) { user(id: $id) { name } }")
+      assert errors(ctx) == []
+    end
+
+    test "variable used in directive argument passes" do
+      ctx =
+        validate(
+          "query($showEmail: Boolean!) { user(id: \"1\") { email @include(if: $showEmail) } }",
+          directives: [include_directive()]
+        )
+
       assert errors(ctx) == []
     end
 
@@ -83,6 +94,19 @@ defmodule Grephql.Validator.Rules.VariablesTest do
                "variable \"$id\" of type \"String!\" is not compatible with argument \"id\" of type \"ID!\""
     end
 
+    test "directive argument variable type mismatch fails" do
+      ctx =
+        validate(
+          "query($showEmail: String!) { user(id: \"1\") { email @include(if: $showEmail) } }",
+          directives: [include_directive()]
+        )
+
+      assert [error] = type_errors(ctx)
+
+      assert error.message =~
+               "variable \"$showEmail\" of type \"String!\" is not compatible with argument \"if\" of type \"Boolean!\""
+    end
+
     test "undefined variable skips type check" do
       ctx = validate("query { user(id: $id) { name } }")
       assert type_errors(ctx) == []
@@ -111,6 +135,19 @@ defmodule Grephql.Validator.Rules.VariablesTest do
 
   defp type_errors(ctx) do
     Enum.filter(errors(ctx), &(&1.message =~ "is not compatible with"))
+  end
+
+  defp include_directive do
+    %SchemaDirective{
+      name: "include",
+      locations: [:field, :fragment_spread, :inline_fragment],
+      args: %{
+        "if" => %InputValue{
+          name: "if",
+          type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :scalar, name: "Boolean"}}
+        }
+      }
+    }
   end
 
   defp types_with_nullable_id_arg do

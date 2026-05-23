@@ -1,6 +1,11 @@
 defmodule Grephql.ValidatorTest do
   use ExUnit.Case, async: true
 
+  alias Grephql.Schema.Directive, as: SchemaDirective
+  alias Grephql.Schema.Field
+  alias Grephql.Schema.InputValue
+  alias Grephql.Schema.Type
+  alias Grephql.Schema.TypeRef
   alias Grephql.Test.SchemaHelper
   alias Grephql.Validator
   alias Grephql.Validator.Error
@@ -9,6 +14,26 @@ defmodule Grephql.ValidatorTest do
     test "returns :ok for a valid query" do
       schema = SchemaHelper.build_schema()
       doc = parse!(~s|query { user(id: "1") { name } }|)
+      assert :ok = Validator.validate(doc, schema)
+    end
+
+    test "accepts directive on query operation when schema allows QUERY" do
+      schema = SchemaHelper.build_schema(directives: [operation_directive([:query])])
+      doc = parse!(~s|query @trace(enabled: true) { user(id: "1") { name } }|)
+
+      assert :ok = Validator.validate(doc, schema)
+    end
+
+    test "accepts directive on mutation operation when schema allows MUTATION" do
+      schema =
+        SchemaHelper.build_schema(
+          mutation_type: "Mutation",
+          types: Map.put(SchemaHelper.default_types(), "Mutation", mutation_type()),
+          directives: [operation_directive([:mutation])]
+        )
+
+      doc = parse!(~s|mutation @trace(enabled: true) { doThing }|)
+
       assert :ok = Validator.validate(doc, schema)
     end
 
@@ -98,5 +123,32 @@ defmodule Grephql.ValidatorTest do
   defp parse!(query) do
     {:ok, doc} = Grephql.Parser.parse(query)
     doc
+  end
+
+  defp operation_directive(locations) do
+    %SchemaDirective{
+      name: "trace",
+      locations: locations,
+      args: %{
+        "enabled" => %InputValue{
+          name: "enabled",
+          type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :scalar, name: "Boolean"}}
+        }
+      }
+    }
+  end
+
+  defp mutation_type do
+    %Type{
+      kind: :object,
+      name: "Mutation",
+      fields: %{
+        "doThing" => %Field{
+          name: "doThing",
+          type: %TypeRef{kind: :scalar, name: "Boolean"},
+          args: %{}
+        }
+      }
+    }
   end
 end

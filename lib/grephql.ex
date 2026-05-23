@@ -26,6 +26,9 @@ defmodule Grephql do
     * `:otp_app` (required) — the OTP application for runtime config lookup
     * `:source` (required) — path to a schema JSON file (relative to the caller file), or an inline JSON string
     * `:scalars` — custom scalar type mappings (default: `%{}`)
+    * `:generation_plugins` — `Grephql.Generation.Plugin` modules that hook into
+      response-type generation. Grephql's built-in plugins (e.g. `@include`/`@skip`
+      handling) always run first; these are appended after them (default: `[]`)
     * `:endpoint` — default GraphQL endpoint URL
     * `:req_options` — default Req options passed directly to `Req.new/1` (keyword list).
       Supports all Req options including middleware/plugins. Common examples:
@@ -81,6 +84,10 @@ defmodule Grephql do
     # evaluate correctly in the caller's compile context.
     scalars_ast = Keyword.get(opts, :scalars, Macro.escape(%{}))
 
+    # generation_plugins are module reference AST too; pass through unescaped so
+    # the {:__aliases__, ...} nodes resolve in the caller's compile context.
+    generation_plugins_ast = Keyword.get(opts, :generation_plugins, [])
+
     quote do
       import Grephql.Macros
 
@@ -90,6 +97,7 @@ defmodule Grephql do
 
       @grephql_otp_app unquote(otp_app)
       @grephql_scalars unquote(scalars_ast)
+      @grephql_generation_plugins unquote(generation_plugins_ast)
       @grephql_use_config unquote(use_config)
       @grephql_schema Grephql.__load_schema__(unquote(source), __ENV__.file)
 
