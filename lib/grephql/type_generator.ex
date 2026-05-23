@@ -271,9 +271,7 @@ defmodule Grephql.TypeGenerator do
 
   # ── resolve ────────────────────────────────────────────────────────────
 
-  # Builds the generated-schema tree from canonical selections. Mirrors the
-  # old collect_selections branching, but produces Generation.Schema nodes
-  # instead of emitting AST inline.
+  # Builds the generated-schema tree from canonical selections.
   defp resolve(selections, parent_type_name, parent_module, context) do
     if union_or_interface?(context.schema, parent_type_name) do
       {shared_fields, inline_fragments} =
@@ -461,8 +459,8 @@ defmodule Grephql.TypeGenerator do
   # ── lower ──────────────────────────────────────────────────────────────
 
   # Lowers the tree into {module, quoted_ast} pairs, rebuilding each field's
-  # tuple/AST from its Generation.Field via the same GeneratorHelpers used by
-  # the legacy path, so plugin nullability changes flow through naturally.
+  # tuple/AST from its Generation.Field, so plugin nullability changes flow
+  # through naturally.
   defp lower(%GenSchema{} = tree), do: lower(tree, [])
 
   defp lower(%GenSchema{kind: :union} = node, acc) do
