@@ -41,12 +41,8 @@ defmodule Grephql.Generation.SchemaTest do
 
       assert hd(mapped.fields).resolved.nullable == true
 
-      assert mapped.children
-             |> hd()
-             |> Map.fetch!(:fields)
-             |> hd()
-             |> Map.fetch!(:resolved)
-             |> Map.fetch!(:nullable)
+      [child] = mapped.children
+      assert hd(child.fields).resolved.nullable == true
     end
 
     test "recurses into union variants" do

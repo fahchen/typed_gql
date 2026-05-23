@@ -2,17 +2,21 @@ defmodule Grephql.ClientModuleGenerationPlugin do
   @moduledoc false
   use Grephql.Generation.Plugin
 
-  alias Grephql.Generation.Field
   alias Grephql.Generation.Schema
 
-  # Forces every `name` field nullable, proving a user plugin reaches the
-  # generation pipeline through `use Grephql`'s `:generation_plugins` option.
+  # Drops every `name` field. Forced nullability is invisible at runtime
+  # (typespecs are not introspectable on generated modules), so this plugin
+  # makes an observable change instead: when it reaches the generation pipeline
+  # via use Grephql's :generation_plugins, the generated struct lacks :name.
   @impl Grephql.Generation.Plugin
-  def after_resolve(tree, _context) do
-    Schema.map_fields(tree, fn
-      %Field{name: :name} = field -> Field.put_nullable(field, true)
-      field -> field
-    end)
+  def after_resolve(tree, _context), do: drop_name(tree)
+
+  defp drop_name(%Schema{} = node) do
+    %{
+      node
+      | fields: Enum.reject(node.fields, &(&1.name == :name)),
+        children: Enum.map(node.children, &drop_name/1)
+    }
   end
 end
 
@@ -117,12 +121,9 @@ defmodule Grephql.ClientModuleTest do
       """)
     end
 
-    test "compiles the client and generates the response modules" do
+    test "a user generation plugin runs and changes the generated modules" do
       assert function_exported?(PluginClient, :get_user, 2)
 
-      # The generated response module exists and decodes responses. A user
-      # plugin running during generation (forcing `name` nullable) must not
-      # break generation or decoding.
       result =
         Grephql.ResponseDecoder.decode!(
           PluginClient.GetUser.Result,
@@ -130,7 +131,10 @@ defmodule Grephql.ClientModuleTest do
         )
 
       assert result.user.id == "1"
-      assert result.user.name == "Alice"
+      # The plugin dropped :name during generation, so the struct has no such
+      # key (the unknown `name` in the payload is ignored). If :generation_plugins
+      # were not wired through, :name would still be present and this would fail.
+      refute Map.has_key?(result.user, :name)
     end
   end
 end

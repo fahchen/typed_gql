@@ -115,6 +115,46 @@ defmodule Grephql.TypeGeneratorTest do
     end
   end
 
+  describe "generation lifecycle hooks" do
+    defmodule RecordingPlugin do
+      @moduledoc false
+      use Grephql.Generation.Plugin
+
+      @impl Grephql.Generation.Plugin
+      def before_normalize(selections, _context) do
+        send(self(), :before_normalize)
+        selections
+      end
+
+      @impl Grephql.Generation.Plugin
+      def after_normalize(selections, _context) do
+        send(self(), :after_normalize)
+        selections
+      end
+
+      @impl Grephql.Generation.Plugin
+      def after_lower(module_asts, _context) do
+        send(self(), :after_lower)
+        module_asts
+      end
+    end
+
+    test "the pipeline invokes before_normalize, after_normalize, and after_lower" do
+      schema = SchemaHelper.build_schema()
+      operation = parse!("query { user(id: \"1\") { name } }")
+
+      TypeGenerator.generate(operation, schema,
+        client_module: Grephql.Test.HookOrder,
+        function_name: :get_user,
+        generation_plugins: [RecordingPlugin]
+      )
+
+      assert_received :before_normalize
+      assert_received :after_normalize
+      assert_received :after_lower
+    end
+  end
+
   describe "nested object fields" do
     test "generates nested embedded schema with embeds_one" do
       types = types_with_posts()

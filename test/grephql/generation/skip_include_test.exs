@@ -8,6 +8,7 @@ defmodule Grephql.Generation.SkipIncludeTest do
               Grephql.Test.SkipInclude.FieldSkip.Result,
               Grephql.Test.SkipInclude.LiteralInclude.Result,
               Grephql.Test.SkipInclude.LiteralSkip.Result,
+              Grephql.Test.SkipInclude.LiteralFragmentInclude.Result,
               Grephql.Test.SkipInclude.InlineFragment.Result,
               Grephql.Test.SkipInclude.FragmentSpread.Result,
               Grephql.Test.SkipInclude.FieldEmbed.Result,
@@ -58,8 +59,8 @@ defmodule Grephql.Generation.SkipIncludeTest do
         )
 
       assert nullable?(tree, :id)
-      # name has no directive and is schema-nullable already; unaffected by plugin
-      assert field(tree, :id).resolved.nullable == true
+      # name carries no directive, so SkipInclude leaves it untouched
+      assert field(tree, :name).query_field.directives == []
     end
 
     test "@skip(if: $var) makes a non-null ID field nullable" do
@@ -91,6 +92,17 @@ defmodule Grephql.Generation.SkipIncludeTest do
         resolve_tree(
           ~s|query Q { user(id: "1") { id @skip(if: false) name } }|,
           Grephql.Test.SkipInclude.LiteralSkip,
+          :q
+        )
+
+      refute nullable?(tree, :id)
+    end
+
+    test "@include(if: true) on an inline fragment leaves inner fields non-null" do
+      tree =
+        resolve_tree(
+          ~s|query Q { user(id: "1") { ... @include(if: true) { id } } }|,
+          Grephql.Test.SkipInclude.LiteralFragmentInclude,
           :q
         )
 
