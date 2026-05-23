@@ -1,7 +1,7 @@
-# Grephql
-[![Build Status](https://github.com/fahchen/grephql/actions/workflows/ci.yml/badge.svg)](https://github.com/fahchen/grephql/actions/workflows/ci.yml)
-[![Hex.pm](https://img.shields.io/hexpm/v/grephql)](https://hex.pm/packages/grephql)
-[![HexDocs](https://img.shields.io/badge/HexDocs-gray)](https://hexdocs.pm/grephql)
+# typedGql (formerly Grephql)
+[![Build Status](https://github.com/fahchen/typed_gql/actions/workflows/ci.yml/badge.svg)](https://github.com/fahchen/typed_gql/actions/workflows/ci.yml)
+[![Hex.pm](https://img.shields.io/hexpm/v/typed_gql)](https://hex.pm/packages/typed_gql)
+[![HexDocs](https://img.shields.io/badge/HexDocs-gray)](https://hexdocs.pm/typed_gql)
 
 Compile-time GraphQL client for Elixir. Parses and validates queries during compilation, generates typed Ecto embedded schemas for responses and variables, and executes queries at runtime via [Req](https://github.com/wojtekmach/req).
 
@@ -20,12 +20,12 @@ Compile-time GraphQL client for Elixir. Parses and validates queries during comp
 
 ## Installation
 
-Add `grephql` to your dependencies in `mix.exs`:
+Add `typed_gql` to your dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:grephql, "~> 0.10.1"}
+    {:typed_gql, "~> 0.10.1"}
   ]
 end
 ```
@@ -35,7 +35,7 @@ end
 ### 1. Download your schema
 
 ```bash
-mix grephql.download_schema \
+mix typed_gql.download_schema \
   --endpoint https://api.example.com/graphql \
   --output priv/schemas/schema.json \
   --header "Authorization: Bearer token123"
@@ -45,7 +45,7 @@ mix grephql.download_schema \
 
 ```elixir
 defmodule MyApp.GitHub do
-  use Grephql,
+  use TypedGql,
     otp_app: :my_app,
     source: "priv/schemas/github.json",
     endpoint: "https://api.github.com/graphql"
@@ -148,12 +148,12 @@ Configuration is resolved in order (later wins): compile-time defaults -> runtim
 ### Compile-time (in `use`)
 
 ```elixir
-use Grephql,
+use TypedGql,
   otp_app: :my_app,
   source: "priv/schemas/github.json",
   endpoint: "https://api.github.com/graphql",
   req_options: [receive_timeout: 30_000],
-  scalars: %{"DateTime" => Grephql.Types.DateTime}
+  scalars: %{"DateTime" => TypedGql.Types.DateTime}
 ```
 
 ### Runtime (application config)
@@ -182,7 +182,7 @@ Add the formatter plugin to your `.formatter.exs`:
 
 ```elixir
 [
-  plugins: [Grephql.Formatter],
+  plugins: [TypedGql.Formatter],
   # ...
 ]
 ```
@@ -191,7 +191,7 @@ Or via dependency import:
 
 ```elixir
 [
-  import_deps: [:grephql],
+  import_deps: [:typed_gql],
   # ...
 ]
 ```
@@ -221,16 +221,16 @@ defgql :get_user, ~GQL"""
 Map GraphQL custom scalars to Ecto types via the `:scalars` option:
 
 ```elixir
-use Grephql,
+use TypedGql,
   otp_app: :my_app,
   source: "schema.json",
   scalars: %{
-    "DateTime" => Grephql.Types.DateTime,
+    "DateTime" => TypedGql.Types.DateTime,
     "JSON"     => :map
   }
 ```
 
-`Grephql.Types.DateTime` is included for ISO 8601 DateTime strings. For other custom scalars, provide any module implementing the `Ecto.Type` behaviour.
+`TypedGql.Types.DateTime` is included for ISO 8601 DateTime strings. For other custom scalars, provide any module implementing the `Ecto.Type` behaviour.
 
 ## Enums
 
@@ -317,7 +317,7 @@ Each `defgql` generates typed Ecto embedded schema modules at compile time. Give
 
 ```elixir
 defmodule MyApp.GitHub do
-  use Grephql, otp_app: :my_app, source: "schema.json"
+  use TypedGql, otp_app: :my_app, source: "schema.json"
 
   deffragment ~GQL"""
     fragment PostFields on Post {
@@ -373,7 +373,7 @@ Each client module has an overridable `prepare_req/1` callback that receives the
 def prepare_req(req) do
   Req.Request.append_response_steps(req,
     request_id: fn {req, resp} ->
-      {req, Grephql.Result.put_resp_assign(resp, :request_id, Req.Response.get_header(resp, "x-request-id"))}
+      {req, TypedGql.Result.put_resp_assign(resp, :request_id, Req.Response.get_header(resp, "x-request-id"))}
     end
   )
 end
@@ -406,12 +406,12 @@ end
 
 ## Mix Tasks
 
-### `mix grephql.download_schema`
+### `mix typed_gql.download_schema`
 
 Downloads a GraphQL schema via introspection and saves it as JSON.
 
 ```bash
-mix grephql.download_schema --endpoint URL --output PATH [--header "Key: Value"]
+mix typed_gql.download_schema --endpoint URL --output PATH [--header "Key: Value"]
 ```
 
 | Option | Required | Description |
@@ -420,7 +420,7 @@ mix grephql.download_schema --endpoint URL --output PATH [--header "Key: Value"]
 | `--output` / `-o` | yes | File path to save the schema JSON |
 | `--header` / `-h` | no | HTTP header in `"Key: Value"` format (repeatable) |
 
-## `use Grephql` Options
+## `use TypedGql` Options
 
 | Option | Required | Description |
 |--------|----------|-------------|
@@ -435,7 +435,7 @@ mix grephql.download_schema --endpoint URL --output PATH [--header "Key: Value"]
 Defaults to Elixir 1.18+ built-in `JSON`, falls back to `Jason`. To override:
 
 ```elixir
-config :grephql, :json_library, Jason
+config :typed_gql, :json_library, Jason
 ```
 
 Any module implementing `encode!/1` and `decode/1` works.

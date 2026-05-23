@@ -1,12 +1,12 @@
-defmodule Grephql.MixProject do
+defmodule TypedGql.MixProject do
   use Mix.Project
 
   @version "0.10.1"
-  @source_url "https://github.com/fahchen/grephql"
+  @source_url "https://github.com/fahchen/typed_gql"
 
   def project do
     [
-      app: :grephql,
+      app: :typed_gql,
       version: @version,
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
@@ -19,7 +19,7 @@ defmodule Grephql.MixProject do
       description: description(),
       package: package(),
       docs: docs(),
-      name: "Grephql",
+      name: "typedGql",
       source_url: @source_url
     ]
   end
@@ -64,7 +64,7 @@ defmodule Grephql.MixProject do
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
-        "Hex" => "https://hex.pm/packages/grephql"
+        "Hex" => "https://hex.pm/packages/typed_gql"
       },
       files:
         ~w(lib guides priv/graphql/introspection.graphql src/*.yrl .formatter.exs mix.exs README.md LICENSE NOTICE)
@@ -86,33 +86,33 @@ defmodule Grephql.MixProject do
         Guides: ~r/guides\/.*/
       ],
       skip_undefined_reference_warnings_on: [
-        "Grephql.TypeMapper",
-        "Grephql.TypeGenerator",
-        "Grephql.InputTypeGenerator"
+        "TypedGql.TypeMapper",
+        "TypedGql.TypeGenerator",
+        "TypedGql.InputTypeGenerator"
       ],
       groups_for_modules: [
         "Core API": [
-          Grephql,
-          Grephql.Query,
-          Grephql.Result,
-          Grephql.Error
+          TypedGql,
+          TypedGql.Query,
+          TypedGql.Result,
+          TypedGql.Error
         ],
         "Type System": [
-          Grephql.EmbeddedSchema,
-          Grephql.ResponseDecoder,
-          Grephql.TypeMapper,
-          Grephql.TypeGenerator,
-          Grephql.InputTypeGenerator,
-          Grephql.Types.DateTime,
-          Grephql.Types.Enum,
-          Grephql.Types.Union,
-          Grephql.Types.PathSegment
+          TypedGql.EmbeddedSchema,
+          TypedGql.ResponseDecoder,
+          TypedGql.TypeMapper,
+          TypedGql.TypeGenerator,
+          TypedGql.InputTypeGenerator,
+          TypedGql.Types.DateTime,
+          TypedGql.Types.Enum,
+          TypedGql.Types.Union,
+          TypedGql.Types.PathSegment
         ],
         Formatting: [
-          Grephql.Formatter
+          TypedGql.Formatter
         ],
         "Mix Tasks": [
-          Mix.Tasks.Grephql.DownloadSchema
+          Mix.Tasks.TypedGql.DownloadSchema
         ]
       ]
     ]
@@ -133,13 +133,13 @@ defmodule Grephql.MixProject do
 
   defp test_coverage do
     [
-      ignore_modules: [Grephql.Parser, :grephql_parser]
+      ignore_modules: [TypedGql.Parser, :typed_gql_parser]
     ]
   end
 
   defp dialyzer do
     [
-      plt_local_path: "priv/plts/grephql.plt",
+      plt_local_path: "priv/plts/typed_gql.plt",
       plt_core_path: "priv/plts/core.plt",
       plt_add_apps: [:ex_unit, :mix]
     ]

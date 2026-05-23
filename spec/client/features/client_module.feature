@@ -1,27 +1,27 @@
 @client-module
 Feature: Client module configuration
   As an Elixir developer
-  I want to configure a GraphQL client module with use Grephql
+  I want to configure a GraphQL client module with use TypedGql
   So that I can bind a schema source and settings in one place
 
-  Rule: Client module is defined with use Grephql and otp_app
+  Rule: Client module is defined with use TypedGql and otp_app
 
     Scenario: Minimal client module with file source
-      Given a module that calls use Grephql with otp_app: :my_app and source: "priv/schemas/service.json"
+      Given a module that calls use TypedGql with otp_app: :my_app and source: "priv/schemas/service.json"
       When the module is compiled
       Then the module is configured to load the schema from the specified file
       And runtime config is read from config :my_app, MyModule
 
     Scenario: Client module with all compile-time options
-      Given a module that calls use Grephql with otp_app, source, and scalars mapping
+      Given a module that calls use TypedGql with otp_app, source, and scalars mapping
       When the module is compiled
       Then compile-time options (scalars) are used for type generation
 
   Rule: Multiple client modules support multiple schemas
 
     Scenario: Two client modules for different services
-      Given MyApp.UserService uses Grephql with source "priv/schemas/user.json"
-      And MyApp.OrderService uses Grephql with source "priv/schemas/order.json"
+      Given MyApp.UserService uses TypedGql with source "priv/schemas/user.json"
+      And MyApp.OrderService uses TypedGql with source "priv/schemas/order.json"
       When both modules are compiled
       Then each module validates queries against its own schema independently
 

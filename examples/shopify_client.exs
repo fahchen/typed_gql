@@ -1,6 +1,6 @@
 # Example: Shopify Admin GraphQL API client
 #
-# Demonstrates using Grephql with the Shopify Admin schema (10MB).
+# Demonstrates using TypedGql with the Shopify Admin schema (10MB).
 # Covers products, orders, customers, mutations with input objects.
 #
 # Enums are auto-handled. Built-in scalars (DateTime, Date, JSON, URL,
@@ -10,8 +10,8 @@
 # Usage: iex -S mix run examples/shopify_client.exs
 
 defmodule Example.ShopifyClient do
-  use Grephql,
-    otp_app: :grephql,
+  use TypedGql,
+    otp_app: :typed_gql,
     source: "shopify_schema.json",
     scalars: %{
       # Shopify-specific scalars not covered by builtins

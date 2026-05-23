@@ -1,13 +1,13 @@
-defmodule Grephql.IntegrationTest do
+defmodule TypedGql.IntegrationTest do
   use ExUnit.Case, async: true
 
-  import Grephql.Test.Helpers, only: [errors_on: 2]
+  import TypedGql.Test.Helpers, only: [errors_on: 2]
 
-  alias Grephql.Result
+  alias TypedGql.Result
 
   defmodule Client do
-    use Grephql,
-      otp_app: :grephql,
+    use TypedGql,
+      otp_app: :typed_gql,
       source: "support/schemas/integration.json",
       endpoint: "https://api.example.com/graphql"
 

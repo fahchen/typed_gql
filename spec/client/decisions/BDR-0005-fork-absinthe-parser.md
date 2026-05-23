@@ -3,7 +3,7 @@ id: BDR-0005
 title: Fork Absinthe's yecc parser and NimbleParsec lexer
 status: accepted
 date: 2026-04-04
-summary: Vendor Absinthe's parser (yecc + NimbleParsec lexer) into Grephql, replacing Absinthe.Language structs with Grephql's own AST
+summary: Vendor Absinthe's parser (yecc + NimbleParsec lexer) into TypedGql, replacing Absinthe.Language structs with TypedGql's own AST
 ---
 
 **Feature**: client/features/compile_time_validation.feature
@@ -11,7 +11,7 @@ summary: Vendor Absinthe's parser (yecc + NimbleParsec lexer) into Grephql, repl
 
 ## Context
 
-Grephql needs a GraphQL query parser to produce AST for compile-time validation.
+TypedGql needs a GraphQL query parser to produce AST for compile-time validation.
 Options were: depend on Absinthe, fork its parser, or write from scratch.
 
 ## Behaviours Considered
@@ -20,7 +20,7 @@ Options were: depend on Absinthe, fork its parser, or write from scratch.
 Full framework as dependency — immediate access to parser and AST.
 
 ### Option B: Fork yecc + lexer from Absinthe
-Copy `absinthe_parser.yrl` and `Absinthe.Lexer` into Grephql, rename AST
+Copy `absinthe_parser.yrl` and `Absinthe.Lexer` into TypedGql, rename AST
 structs. MIT license, attribute in NOTICE file.
 
 ### Option C: Write parser from scratch with NimbleParsec

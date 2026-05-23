@@ -1,10 +1,10 @@
-defmodule Grephql.Test.SchemaHelper do
+defmodule TypedGql.Test.SchemaHelper do
   @moduledoc false
 
-  alias Grephql.Schema
-  alias Grephql.Schema.Field
-  alias Grephql.Schema.Type
-  alias Grephql.Schema.TypeRef
+  alias TypedGql.Schema
+  alias TypedGql.Schema.Field
+  alias TypedGql.Schema.Type
+  alias TypedGql.Schema.TypeRef
 
   @spec build_schema(keyword()) :: Schema.t()
   def build_schema(opts \\ []) do
@@ -31,7 +31,7 @@ defmodule Grephql.Test.SchemaHelper do
               of_type: %TypeRef{kind: :object, name: "User"}
             },
             args: %{
-              "id" => %Grephql.Schema.InputValue{
+              "id" => %TypedGql.Schema.InputValue{
                 name: "id",
                 type: %TypeRef{
                   kind: :non_null,

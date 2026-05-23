@@ -1,7 +1,7 @@
-defmodule Grephql.Test.TypespecFixture do
+defmodule TypedGql.Test.TypespecFixture do
   @moduledoc false
-  use Grephql,
-    otp_app: :grephql,
+  use TypedGql,
+    otp_app: :typed_gql,
     source: "schemas/integration.json",
     endpoint: "https://api.example.com/graphql"
 

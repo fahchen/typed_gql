@@ -271,7 +271,7 @@ Feature: Compile-time GraphQL validation
 
     Scenario: Built-in Ecto Type scalar compiles without explicit mapping
       Given a schema with custom scalar "DateTime"
-      And Grephql provides a built-in Ecto Type for "DateTime"
+      And TypedGql provides a built-in Ecto Type for "DateTime"
       And no explicit scalar mapping is configured
       When the developer writes ~GQL referencing a "DateTime" field
       Then the module compiles successfully using the built-in

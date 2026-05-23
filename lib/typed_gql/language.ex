@@ -1,0 +1,58 @@
+defmodule TypedGql.Language do
+  @moduledoc false
+
+  @type selection_t() ::
+          TypedGql.Language.Field.t()
+          | TypedGql.Language.FragmentSpread.t()
+          | TypedGql.Language.InlineFragment.t()
+
+  @type value_t() ::
+          TypedGql.Language.IntValue.t()
+          | TypedGql.Language.FloatValue.t()
+          | TypedGql.Language.StringValue.t()
+          | TypedGql.Language.BooleanValue.t()
+          | TypedGql.Language.NullValue.t()
+          | TypedGql.Language.EnumValue.t()
+          | TypedGql.Language.ListValue.t()
+          | TypedGql.Language.ObjectValue.t()
+          | TypedGql.Language.Variable.t()
+
+  @type type_reference_t() ::
+          TypedGql.Language.NamedType.t()
+          | TypedGql.Language.ListType.t()
+          | TypedGql.Language.NonNullType.t()
+
+  @type definition_t() ::
+          TypedGql.Language.OperationDefinition.t()
+          | TypedGql.Language.Fragment.t()
+          | TypedGql.Language.SchemaDefinition.t()
+          | TypedGql.Language.SchemaDeclaration.t()
+          | TypedGql.Language.ObjectTypeDefinition.t()
+          | TypedGql.Language.InterfaceTypeDefinition.t()
+          | TypedGql.Language.UnionTypeDefinition.t()
+          | TypedGql.Language.EnumTypeDefinition.t()
+          | TypedGql.Language.ScalarTypeDefinition.t()
+          | TypedGql.Language.InputObjectTypeDefinition.t()
+          | TypedGql.Language.DirectiveDefinition.t()
+          | TypedGql.Language.TypeExtensionDefinition.t()
+
+  defmodule Source do
+    @moduledoc false
+    use TypedStructor
+
+    typed_structor do
+      field :body, String.t(), default: ""
+      field :name, String.t(), default: "GraphQL"
+    end
+  end
+
+  defmodule Document do
+    @moduledoc false
+    use TypedStructor
+
+    typed_structor do
+      field :definitions, [TypedGql.Language.definition_t()], default: []
+      field :loc, map(), default: %{line: nil}
+    end
+  end
+end

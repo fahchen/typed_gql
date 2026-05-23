@@ -7,7 +7,7 @@ summary: One module handles schema binding, config, and query definitions — no
 ---
 
 **Feature**: client/features/client_module.feature
-**Rule**: Client module is defined with use Grephql and otp_app
+**Rule**: Client module is defined with use TypedGql and otp_app
 
 ## Context
 
@@ -18,13 +18,13 @@ from query modules. Also considered using application config for schema source.
 
 ### Option A: Separate schema behaviour module + query module
 Schema module implements `fetch_schema/0` callback, query module binds via
-`use Grephql, schema: MyApp.Schema`.
+`use TypedGql, schema: MyApp.Schema`.
 
 ### Option B: All config in application environment
-`config :grephql, MyApp.Schema, source: "...", endpoint: "..."`.
+`config :typed_gql, MyApp.Schema, source: "...", endpoint: "..."`.
 
 ### Option C: Single client module with use options + otp_app
-`use Grephql, otp_app: :my_app, source: "..."` in one module.
+`use TypedGql, otp_app: :my_app, source: "..."` in one module.
 
 ## Decision
 
@@ -39,4 +39,4 @@ the same app (module compilation order is non-deterministic).
 
 **Option B** — Elixir docs recommend against libraries using application
 environment as global storage. Config should belong to the user's app, not
-to `:grephql`.
+to `:typed_gql`.

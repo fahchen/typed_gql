@@ -1,4 +1,4 @@
-Grephql
+typedGql
 Copyright (c) 2026 Phil Chen
 
 This project includes code adapted from Absinthe:
@@ -29,5 +29,5 @@ Licensed under the MIT License:
   WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Adapted files:
-  - lib/grephql/lexer.ex (from Absinthe.Lexer)
-  - src/grephql_parser.yrl (from src/absinthe_parser.yrl)
+  - lib/typed_gql/lexer.ex (from Absinthe.Lexer)
+  - src/typed_gql_parser.yrl (from src/absinthe_parser.yrl)

@@ -1,4 +1,4 @@
-defmodule Grephql.Test.Helpers do
+defmodule TypedGql.Test.Helpers do
   @moduledoc false
 
   @spec errors_on(Ecto.Changeset.t(), atom()) :: [String.t()]
