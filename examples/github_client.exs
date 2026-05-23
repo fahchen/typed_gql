@@ -1,6 +1,6 @@
 # Example: GitHub GraphQL API client
 #
-# Demonstrates using Grephql with the GitHub GraphQL schema (5.9MB).
+# Demonstrates using TypedGql with the GitHub GraphQL schema (5.9MB).
 # Covers nested objects, connections, input types, and mutations.
 #
 # Enums are auto-handled. Built-in scalars (DateTime, Date, URI, HTML,
@@ -10,8 +10,8 @@
 # Usage: iex -S mix run examples/github_client.exs
 
 defmodule Example.GitHubClient do
-  use Grephql,
-    otp_app: :grephql,
+  use TypedGql,
+    otp_app: :typed_gql,
     source: "github_schema.json",
     scalars: %{
       # GitHub-specific scalars not covered by builtins

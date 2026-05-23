@@ -1,9 +1,9 @@
 defmodule TypedStructor.Plugins.AccessTest do
   use ExUnit.Case, async: true
 
-  alias Grephql.Test.Response.Profile
-  alias Grephql.Test.Response.ScalarUser
-  alias Grephql.Test.Response.UserWithProfile
+  alias TypedGql.Test.Response.Profile
+  alias TypedGql.Test.Response.ScalarUser
+  alias TypedGql.Test.Response.UserWithProfile
 
   describe "fetch/2" do
     test "returns {:ok, value} for existing keys" do

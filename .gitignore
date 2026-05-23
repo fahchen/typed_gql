@@ -26,7 +26,7 @@ erl_crash.dump
 /.dev/
 
 # Ignore package tarball (built via "mix hex.build").
-grephql-*.tar
+typed_gql-*.tar
 
 # Generated Erlang files from yecc.
 /src/*.erl

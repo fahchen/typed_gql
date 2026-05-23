@@ -147,10 +147,10 @@ Feature: GraphQL to Elixir type generation
       Then the Elixir type is derived from the Ecto Type's type/0 callback
       And values are serialized via dump/1 and deserialized via load/1
 
-    Scenario: Built-in Ecto Type scalar provided by Grephql
+    Scenario: Built-in Ecto Type scalar provided by TypedGql
       Given a schema field "createdAt: DateTime!"
       And no custom scalar mapping is configured for "DateTime"
-      But Grephql provides a built-in Grephql.Types.DateTime implementing Ecto.Type
+      But TypedGql provides a built-in TypedGql.Types.DateTime implementing Ecto.Type
       When the type is generated
       Then the built-in type is used automatically
 

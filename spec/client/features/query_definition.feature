@@ -35,7 +35,7 @@ Feature: GraphQL query definition and execution
       And the ~GQL sigil content can be formatted by mix format
 
     Scenario: ~GQL formatter plugin auto-formats GraphQL strings
-      Given a .formatter.exs with plugins: [Grephql.Formatter] (or import_deps: [:grephql])
+      Given a .formatter.exs with plugins: [TypedGql.Formatter] (or import_deps: [:typed_gql])
       When the developer runs mix format on a file containing a ~GQL heredoc
       Then the GraphQL content inside ~GQL is pretty-printed with proper indentation
       And inline ~GQL sigils (single-line) are left unchanged
@@ -47,7 +47,7 @@ Feature: GraphQL query definition and execution
       When the developer defines defgql :get_user with a query that has variables
       Then the generated function includes @doc with the operation name, variable table, types, and generated module names
 
-  Rule: Grephql.execute takes query, variables, and optional opts (opts defaults to [])
+  Rule: TypedGql.execute takes query, variables, and optional opts (opts defaults to [])
 
     Scenario: Execute with variables and no options
       Given a defgql function get_user defined with a valid query
@@ -91,12 +91,12 @@ Feature: GraphQL query definition and execution
     Scenario: Successful response with full data
       Given a valid query is executed
       When the GraphQL server returns data with no errors
-      Then the response is {:ok, %Grephql.Result{data: typed_result, errors: []}}
+      Then the response is {:ok, %TypedGql.Result{data: typed_result, errors: []}}
 
     Scenario: Partial data with GraphQL errors
       Given a valid query is executed
       When the GraphQL server returns partial data with field-level errors
-      Then the response is {:ok, %Grephql.Result{data: partial_typed_result, errors: [%Grephql.Error{}, ...]}}
+      Then the response is {:ok, %TypedGql.Result{data: partial_typed_result, errors: [%TypedGql.Error{}, ...]}}
 
     Scenario: Transport-level failure
       Given a valid query is executed
@@ -108,11 +108,11 @@ Feature: GraphQL query definition and execution
       When the GraphQL server returns a non-2xx HTTP status
       Then the response is {:error, %Req.Response{}}
 
-  Rule: GraphQL errors are represented as Grephql.Error structs
+  Rule: GraphQL errors are represented as TypedGql.Error structs
 
     Scenario: Error struct contains standard GraphQL error fields
       Given a GraphQL response with errors
-      Then each error is a %Grephql.Error{} with fields message, path, locations, and extensions
+      Then each error is a %TypedGql.Error{} with fields message, path, locations, and extensions
       And message is a string
       And path is a list of strings and integers or nil
       And locations is a list of %{line: integer, column: integer} or nil
