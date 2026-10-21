@@ -43,9 +43,10 @@ defmodule TypedGql.DocumentLocationTest do
       assert_located(Fixture.Search.Result.Search.User)
     end
 
-    # No inline fragment names Post, so it has no node of its own to point at.
-    test "a variant no fragment selects stays with the field" do
-      assert_located(Fixture.Search.Result.Search.Post)
+    test "a variant an abstract condition declares points at that condition" do
+      assert_located(Fixture.AbstractOnly.Result.Search.Union)
+      assert_located(Fixture.AbstractOnly.Result.Search.User)
+      assert_located(Fixture.AbstractOnly.Result.Search.Post)
     end
 
     test "a fragment's modules point into its own deffragment" do

@@ -17,6 +17,7 @@ defmodule TypedGql.TypeGeneratorTest do
               TypedGql.Test.FragmentSpreadBody.Fragments.UserDetails,
               TypedGql.Test.SharedFrag.Fragments.NodeFields,
               TypedGql.Test.UnionFrag.Fragments.SearchFields.User,
+              TypedGql.Test.DiamondFragments.Search.Result.Search.User,
               TypedGql.Test.InterfaceNoTypename.GetNode.Result.Node.AppSubscription,
               TypedGql.Test.InterfaceNoTypename.GetNode.Result.Node.Shop,
               TypedGql.Test.Isolation.GetUser.Result.User,
@@ -39,12 +40,12 @@ defmodule TypedGql.TypeGeneratorTest do
               TypedGql.Test.UnionField.Search.Result.Result,
               TypedGql.Test.UnionSharedOnly.Search.Result.Search,
               TypedGql.Test.PartialUnion.Search.Result,
-              TypedGql.Test.PartialUnion.Search.Result.Search.Post,
               TypedGql.Test.AbstractCondition.Search.Result,
               TypedGql.Test.AbstractCondition.Search.Result.Search.Post,
               TypedGql.Test.SpreadCondition.Search.Result.Search.Post,
               TypedGql.Test.SpreadCondition.Search.Result.Search.User,
-              TypedGql.Test.GhostCondition.Search.Result.Search.User,
+              TypedGql.Test.GhostCondition.Search.Result.Search,
+              TypedGql.Test.GhostAlongside.Search.Result.Search.User,
               TypedGql.Test.UnusableTypename.Search.Result,
               TypedGql.Test.UnusableTypename.Search.Result.Search.User,
               TypedGql.Test.RepeatedUnion.Search.Result.Search.Post,
@@ -60,7 +61,6 @@ defmodule TypedGql.TypeGeneratorTest do
               TypedGql.Test.ImplementedInterface.GetNode.Result,
               TypedGql.Test.ImplementedInterface.GetNode.Result.Node,
               TypedGql.Test.MergedSubSelections.Search.Result.Search.User.Profile,
-              TypedGql.Test.PartialInterface.Search.Result.Search.Post,
               TypedGql.Test.PartialInterface.Search.Result.Search.User,
               TypedGql.Test.TransitiveInterface.GetNode.Result,
               TypedGql.Test.TransitiveInterface.GetNode.Result.Node,
@@ -699,7 +699,7 @@ defmodule TypedGql.TypeGeneratorTest do
           end
         )
 
-      operation = parse!("query { search { __typename ... on User { email } } }")
+      operation = parse!("query { search { __typename ... on Union { id } } }")
 
       assert_raise CompileError, ~r/\(union dispatcher\) and Union both name/, fn ->
         TypeGenerator.generate(operation, schema,
@@ -936,23 +936,30 @@ defmodule TypedGql.TypeGeneratorTest do
       assert result.node.name == "Alice"
     end
 
-    test "a member with no inline fragment still decodes, carrying the shared fields" do
+    test "a member the document does not declare fails to decode" do
       schema = schema_with_union()
       operation = parse!("query { search { __typename id ... on User { email } } }")
 
-      TypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.PartialUnion,
-        function_name: :search,
-        caller_env: __ENV__
-      )
+      modules =
+        TypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.PartialUnion,
+          function_name: :search,
+          caller_env: __ENV__
+        )
+
+      # Post is a member of the union but no fragment declares it, so it gets no
+      # struct: a struct for it could only carry the shared fields, which is a
+      # shape the query never asked for.
+      assert TypedGql.Test.PartialUnion.Search.Result.Search.User in modules
+      refute TypedGql.Test.PartialUnion.Search.Result.Search.Post in modules
 
       json = %{"search" => [%{"__typename" => "Post", "id" => "7"}]}
-      result = TypedGql.ResponseDecoder.decode!(TypedGql.Test.PartialUnion.Search.Result, json)
 
-      assert [%{__struct__: TypedGql.Test.PartialUnion.Search.Result.Search.Post} = post] =
-               result.search
-
-      assert post.id == "7"
+      # The dispatcher has nothing to send it to, so the response is refused
+      # rather than decoded into a struct missing what the member could have.
+      assert_raise ArgumentError, ~r/cannot load .*Post/, fn ->
+        TypedGql.ResponseDecoder.decode!(TypedGql.Test.PartialUnion.Search.Result, json)
+      end
     end
 
     test "an abstract type condition applies to every member it covers" do
@@ -1028,11 +1035,11 @@ defmodule TypedGql.TypeGeneratorTest do
       )
 
       user_fields = TypedGql.Test.SpreadCondition.Search.Result.Search.User.__schema__(:fields)
-      post_fields = TypedGql.Test.SpreadCondition.Search.Result.Search.Post.__schema__(:fields)
 
-      # `email` belongs to the User variant only; Post keeps just the shared field.
+      # `email` belongs to the User variant only, and Post — which the spread's
+      # condition does not name — gets no variant at all.
       assert :email in user_fields
-      refute :email in post_fields
+      refute Code.ensure_loaded?(TypedGql.Test.SpreadCondition.Search.Result.Search.Post)
     end
 
     test "a fragment nested inside an abstract one reaches the concrete member" do
@@ -1512,12 +1519,13 @@ defmodule TypedGql.TypeGeneratorTest do
         caller_env: __ENV__
       )
 
-      # Named covers User but not Post, so hoisting would hand `name` to Post too.
+      # Named covers User but not Post: the variant exists for the member the
+      # condition declares, and Post is left out entirely rather than generated
+      # with the shared fields alone.
       user_fields = TypedGql.Test.PartialInterface.Search.Result.Search.User.__schema__(:fields)
-      post_fields = TypedGql.Test.PartialInterface.Search.Result.Search.Post.__schema__(:fields)
 
       assert :name in user_fields
-      refute :name in post_fields
+      refute Code.ensure_loaded?(TypedGql.Test.PartialInterface.Search.Result.Search.Post)
     end
 
     test "an interface implemented through another interface is still shared" do
@@ -1553,19 +1561,47 @@ defmodule TypedGql.TypeGeneratorTest do
     end
 
     # Rules.Fragments rejects this before generation runs, but generate/3 is
-    # public and does not validate, so it degrades instead of crashing.
+    # public and does not validate, so it degrades instead of crashing: a
+    # condition the schema does not declare declares no member, and with no
+    # member declared the selection is a plain object rather than a dispatcher
+    # with nothing to dispatch to.
     test "a type condition the schema does not declare contributes to no member" do
       schema = schema_with_union()
       operation = parse!("query { search { __typename ... on Ghost { id } } }")
 
+      modules =
+        TypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.GhostCondition,
+          function_name: :search,
+          caller_env: __ENV__
+        )
+
+      assert TypedGql.Test.GhostCondition.Search.Result.Search in modules
+      refute TypedGql.Test.GhostCondition.Search.Result.Search.Union in modules
+
+      fields = TypedGql.Test.GhostCondition.Search.Result.Search.__schema__(:fields)
+      assert fields == [:__typename]
+
+      json = %{"search" => [%{"__typename" => "User"}]}
+      result = TypedGql.ResponseDecoder.decode!(TypedGql.Test.GhostCondition.Search.Result, json)
+
+      assert [%{__struct__: TypedGql.Test.GhostCondition.Search.Result.Search}] = result.search
+    end
+
+    test "a type condition the schema does not declare contributes nothing to a declared member" do
+      schema = schema_with_union()
+
+      operation =
+        parse!("query { search { __typename ... on User { email } ... on Ghost { id } } }")
+
       TypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.GhostCondition,
+        client_module: TypedGql.Test.GhostAlongside,
         function_name: :search,
         caller_env: __ENV__
       )
 
-      fields = TypedGql.Test.GhostCondition.Search.Result.Search.User.__schema__(:fields)
-      assert fields == [:__typename]
+      fields = TypedGql.Test.GhostAlongside.Search.Result.Search.User.__schema__(:fields)
+      assert fields == [:__typename, :email]
     end
   end
 

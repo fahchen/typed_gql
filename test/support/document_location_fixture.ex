@@ -26,6 +26,9 @@ defmodule TypedGql.Test.DocumentLocationFixture do
   }
   """)
 
+  # Only User is declared, so Post — a member of the union the document never
+  # names — has no variant at all. The dispatcher belongs to the field whose
+  # type is the union, the variant to the fragment that names it.
   @search __ENV__.line + 1
   defgql(:search, ~GQL"""
   query Search($term: String!) {
@@ -33,6 +36,20 @@ defmodule TypedGql.Test.DocumentLocationFixture do
       __typename
       ... on User {
         name
+      }
+    }
+  }
+  """)
+
+  # Both members are declared by an abstract condition that names neither, so
+  # each variant points at the condition that brought it in.
+  @abstract_only __ENV__.line + 1
+  defgql(:abstract_only, ~GQL"""
+  query AbstractOnly($term: String!) {
+    search(query: $term) {
+      __typename
+      ... on Node {
+        id
       }
     }
   }
@@ -264,13 +281,15 @@ defmodule TypedGql.Test.DocumentLocationFixture do
       __MODULE__.GetUser.Variables => @get_user + 1,
       __MODULE__.GetUser.Result.User => @get_user + 2,
       __MODULE__.GetUser.Result.User.Profile => @get_user + 4,
-      # The dispatcher belongs to the field whose type is the union, and so does
-      # the Post variant: no inline fragment selects it, it decodes with the
-      # shared `__typename` alone.
+      # The dispatcher belongs to the field whose type is the union, and so
+      # does nothing else: Post is not declared, so it has no variant to place.
       __MODULE__.Search.Result => @search + 1,
       __MODULE__.Search.Result.Search.Union => @search + 2,
-      __MODULE__.Search.Result.Search.Post => @search + 2,
       __MODULE__.Search.Result.Search.User => @search + 4,
+      # `... on Node` names no member, so both variants stay with it.
+      __MODULE__.AbstractOnly.Result.Search.Union => @abstract_only + 2,
+      __MODULE__.AbstractOnly.Result.Search.User => @abstract_only + 4,
+      __MODULE__.AbstractOnly.Result.Search.Post => @abstract_only + 4,
       # `... on Node` at +4 applies to both members and names neither, so each
       # variant stays with the fragment that does name it.
       __MODULE__.AbstractFirst.Result.Search.Union => @abstract_first + 2,

@@ -71,9 +71,16 @@ defmodule TypedGql.TypeGenerator do
   ## Union/Interface support
 
   When a field's type is a union or interface, inline fragments determine
-  which concrete types to generate. Shared fields (outside fragments) are
-  merged into each concrete type's struct. A parameterized `TypedGql.Types.Union`
-  Ecto Type handles `__typename`-based dispatch during deserialization.
+  which concrete types to generate: one variant per type the document declares,
+  or a single embedded schema when it declares none. Shared fields (outside
+  fragments) are merged into each variant's struct. A parameterized
+  `TypedGql.Types.Union` Ecto Type handles `__typename`-based dispatch during
+  deserialization, and its `t/0` is the union of the variants it can return.
+
+  A member the document does not declare gets no struct, so a response carrying
+  one fails to load rather than decoding to a struct that could only hold the
+  shared fields. Declare the member — `... on Type { __typename }` is enough —
+  to make it representable.
   """
 
   alias TypedGql.Generation.Context
@@ -793,11 +800,17 @@ defmodule TypedGql.TypeGenerator do
 
   defp faithful_many?(_field), do: false
 
-  # A variant per possible type of the abstract parent, not per inline fragment:
-  # the server may return any member, including one no fragment selected, and it
-  # answers with a concrete typename even when the fragment condition was itself
-  # abstract (`... on Node`). Members without a matching fragment still decode,
-  # carrying the shared fields alone.
+  # A variant per type the document declares, not per possible type of the
+  # abstract parent: a member no fragment names has no fields of its own, so a
+  # struct for it costs a module per member and types the result as "any member"
+  # while the document only ever asked about some of them. A response carrying a
+  # member the document does not declare fails to decode instead of arriving with
+  # the shared fields alone — the honest answer, since the query cannot express
+  # what came back.
+  #
+  # A condition the schema does not declare (reachable only for a caller that
+  # skipped validation) declares nothing. With nothing declared the selection
+  # degrades to a plain object rather than to a dispatcher with no members.
   defp resolve_union(
          shared_fields,
          inline_fragments,
@@ -807,10 +820,35 @@ defmodule TypedGql.TypeGenerator do
          loc
        ) do
     {:ok, parent} = Schema.get_type(context.schema, parent_type_name)
-    typename_values = parent.possible_types
 
-    {typename_to_module, variants} =
-      Enum.reduce(typename_values, {%{}, []}, fn type_name, {type_map, variants_acc} ->
+    case declared_type_names(inline_fragments, parent, context) do
+      [] ->
+        resolve_abstract_fields(shared_fields, parent_type_name, parent_module, context, loc)
+
+      declared ->
+        resolve_declared_union(
+          shared_fields,
+          inline_fragments,
+          declared,
+          parent,
+          parent_module,
+          context,
+          loc
+        )
+    end
+  end
+
+  defp resolve_declared_union(
+         shared_fields,
+         inline_fragments,
+         declared,
+         parent,
+         parent_module,
+         context,
+         loc
+       ) do
+    resolved =
+      Enum.map(declared, fn type_name ->
         merged_selections =
           shared_fields ++ member_selections(inline_fragments, type_name, context)
 
@@ -820,39 +858,70 @@ defmodule TypedGql.TypeGenerator do
 
         variant =
           resolve_object(merged_selections, type_name, variant_module, context,
-            typename_values: typename_values,
-            loc: variant_loc(inline_fragments, type_name) || loc
+            typename_values: parent.possible_types,
+            loc: variant_loc(inline_fragments, type_name, context) || loc
           )
 
-        {Map.put(type_map, type_name, variant_module), [variant | variants_acc]}
+        {type_name, variant_module, variant}
       end)
+
+    typename_to_module = Map.new(resolved, fn {name, module, _variant} -> {name, module} end)
+    variants = Enum.map(resolved, fn {_name, _module, variant} -> variant end)
 
     # Union type module names derived from schema at compile time
     # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
     union_module = Module.concat(parent_module, "Union")
-    reject_variant_collisions!(typename_to_module, union_module, parent_type_name)
+    reject_variant_collisions!(typename_to_module, union_module, parent.name)
 
     %GenSchema{
       kind: :union,
       module: parent_module,
       union_module: union_module,
       typename_to_module: typename_to_module,
-      children: :lists.reverse(variants),
+      children: variants,
       loc: loc
     }
   end
 
-  # A variant module belongs at the inline fragment that names that member.
-  # Matching on `applies_to?` instead would let `... on Node` — which applies to
-  # every member implementing it — claim all of them, so the answer would depend
-  # on which condition was written first. A member no fragment names, reached
-  # only through an abstract condition or not selected at all, has no node of
-  # its own and stays with the field whose type is abstract.
-  defp variant_loc(inline_fragments, type_name) do
-    case Enum.find(inline_fragments, &(&1.type_condition.name == type_name)) do
-      nil -> nil
-      %InlineFragment{} = fragment -> SourceAnchor.loc(fragment)
+  # The concrete types the document names, in the order it names them: a
+  # condition on an object type declares that one type, and a condition on an
+  # abstract type declares every type the parent can produce that it covers.
+  # `... on Node` therefore still declares its members — the condition is what
+  # the document wrote — but `... on Named` over a union stops at the members
+  # Named actually covers. The intersection is what keeps a condition from
+  # declaring a member its own parent cannot produce.
+  defp declared_type_names(inline_fragments, parent, context) do
+    inline_fragments
+    |> Enum.flat_map(fn %InlineFragment{type_condition: condition} ->
+      condition_type_names(condition, context)
+    end)
+    |> Enum.filter(&(&1 in parent.possible_types))
+    |> Enum.uniq()
+  end
+
+  defp condition_type_names(%{name: name}, context) do
+    if Schema.abstract?(context.schema, name) do
+      {:ok, abstract} = Schema.get_type(context.schema, name)
+      abstract.possible_types
+    else
+      [name]
     end
+  end
+
+  # A variant module belongs at the fragment that names its member — the whole
+  # `... on User`, not an abstract condition above it that happens to cover the
+  # same member — or, failing that, at the condition that first covers it. A
+  # member no fragment declares has no variant at all, so every variant has an
+  # answer here whenever validation ran; a caller that skipped it falls back to
+  # the field's own location.
+  defp variant_loc(inline_fragments, type_name, context) do
+    fragment =
+      Enum.find(inline_fragments, &(&1.type_condition.name == type_name)) ||
+        Enum.find(inline_fragments, fn %InlineFragment{type_condition: condition} ->
+          type_name in condition_type_names(condition, context)
+        end)
+
+    fragment && SourceAnchor.loc(fragment)
   end
 
   # Every variant gets a module named after its camelized typename, and the
