@@ -77,6 +77,22 @@ defmodule TypedGql.Test.DocumentLocationFixture do
   }
   """)
 
+  # `... on User` sits inside the condition that covers it: User is named by a
+  # nested fragment and Post only by the abstract one above.
+  @nested_condition __ENV__.line + 1
+  defgql(:nested_condition, ~GQL"""
+  query NestedCondition($term: String!) {
+    search(query: $term) {
+      ... on Node {
+        id
+        ... on User {
+          name
+        }
+      }
+    }
+  }
+  """)
+
   @create_post __ENV__.line + 1
   defgql(:create_post, ~GQL"""
   mutation CreatePost($input: CreatePostInput!) {
@@ -295,6 +311,11 @@ defmodule TypedGql.Test.DocumentLocationFixture do
       __MODULE__.AbstractFirst.Result.Search.Union => @abstract_first + 2,
       __MODULE__.AbstractFirst.Result.Search.User => @abstract_first + 7,
       __MODULE__.AbstractFirst.Result.Search.Post => @abstract_first + 10,
+      # A member named by a nested condition keeps that condition, however deep
+      # it sits; the member only the outer one covers stays with the outer one.
+      __MODULE__.NestedCondition.Result.Search.Union => @nested_condition + 2,
+      __MODULE__.NestedCondition.Result.Search.User => @nested_condition + 5,
+      __MODULE__.NestedCondition.Result.Search.Post => @nested_condition + 3,
       # The input type is anchored to the variable definition that names it,
       # which the printer keeps on the signature line. `CreatePostInput` is
       # named by :shared_input below as well, but the first `defgql` to generate

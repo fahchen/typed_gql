@@ -49,6 +49,14 @@ defmodule TypedGql.DocumentLocationTest do
       assert_located(Fixture.AbstractOnly.Result.Search.Post)
     end
 
+    # The condition naming a member may sit inside the one covering it, so the
+    # search cannot stop at this level's own fragments.
+    test "a variant named by a nested condition points at that nested one" do
+      assert_located(Fixture.NestedCondition.Result.Search.Union)
+      assert_located(Fixture.NestedCondition.Result.Search.User)
+      assert_located(Fixture.NestedCondition.Result.Search.Post)
+    end
+
     test "a fragment's modules point into its own deffragment" do
       assert_located(Fixture.Fragments.UserFields)
       assert_located(Fixture.Fragments.UserFields.Profile)

@@ -915,13 +915,30 @@ defmodule TypedGql.TypeGenerator do
   # answer here whenever validation ran; a caller that skipped it falls back to
   # the field's own location.
   defp variant_loc(inline_fragments, type_name, context) do
+    fragments = fragments_below(inline_fragments)
+
     fragment =
-      Enum.find(inline_fragments, &(&1.type_condition.name == type_name)) ||
-        Enum.find(inline_fragments, fn %InlineFragment{type_condition: condition} ->
+      Enum.find(fragments, &(&1.type_condition.name == type_name)) ||
+        Enum.find(fragments, fn %InlineFragment{type_condition: condition} ->
           type_name in condition_type_names(condition, context)
         end)
 
     fragment && SourceAnchor.loc(fragment)
+  end
+
+  # A member can be named below the condition that covers it —
+  # `... on Node { ... on User { email } }` — and the module belongs at the
+  # fragment that named it rather than at the abstract one above. Only abstract
+  # parents leave anything nested here: normalization flattens the inline
+  # fragments of an object parent into the parent itself.
+  defp fragments_below(selections) do
+    Enum.flat_map(selections, fn
+      %InlineFragment{} = fragment ->
+        [fragment | fragments_below(fragment.selection_set.selections)]
+
+      %QueryField{} ->
+        []
+    end)
   end
 
   # Every variant gets a module named after its camelized typename, and the
