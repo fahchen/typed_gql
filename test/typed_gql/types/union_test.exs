@@ -121,6 +121,14 @@ defmodule TypedGql.Types.UnionTest do
     end
   end
 
+  describe "module_ast/1" do
+    test "rejects a dispatcher with no members to dispatch to" do
+      assert_raise ArgumentError, ~r/at least one member module/, fn ->
+        Union.module_ast(%{})
+      end
+    end
+  end
+
   describe "embed_as/2" do
     test "returns :dump" do
       assert :dump == SearchUnion.embed_as(:json, %{})

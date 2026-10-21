@@ -35,4 +35,18 @@ defmodule TypedGql.Test.TypespecFixture do
     }
   }
   """)
+
+  defgql(:list_users_and_posts, """
+  query ListUsersAndPosts($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      __typename
+      ... on User {
+        name
+      }
+      ... on Post {
+        title
+      }
+    }
+  }
+  """)
 end

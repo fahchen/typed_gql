@@ -25,7 +25,9 @@ defmodule TypedGql.Types.Union do
   Called by the type generator at compile time, which creates the module from
   it alongside the embedded schemas, so that this one records the caller's
   source location like the rest. `typename_to_module` maps GraphQL
-  `__typename` strings to their corresponding embedded schema modules.
+  `__typename` strings to their corresponding embedded schema modules; it must
+  name at least one member — a dispatcher with nothing to dispatch to describes
+  no response — and an empty map is rejected.
   """
   @spec module_ast(%{String.t() => module()}) :: Macro.t()
   # Multiple function clauses required by Ecto.ParameterizedType behaviour
@@ -41,7 +43,10 @@ defmodule TypedGql.Types.Union do
                             )
                           )
 
-      @type t() :: struct()
+      # Naming the variants rather than widening to `struct()` is what makes a
+      # result's own typespec readable: the field says `Union.t()`, and this is
+      # what that means.
+      @type t() :: unquote(variant_types(typename_to_module))
 
       @impl Ecto.ParameterizedType
       def init(_opts), do: %{}
@@ -114,4 +119,31 @@ defmodule TypedGql.Types.Union do
       defp resolve_module(_map), do: :error
     end
   end
+
+  # The variants the dispatcher can return, as one union, in sorted order so the
+  # same document renders the same typespec on every compile.
+  defp variant_types(typename_to_module) do
+    variants =
+      typename_to_module
+      |> Map.values()
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    if variants == [] do
+      raise ArgumentError,
+            "a union dispatcher needs at least one member module: " <>
+              inspect(typename_to_module)
+    end
+
+    # Reversed, so the union reads in sorted order; the head is taken out because
+    # `Enum.reduce/2` would return a one-element list untouched, leaving that
+    # variant named as a bare module instead of its `t/0`.
+    [first | rest] = Enum.reverse(variants)
+
+    Enum.reduce(rest, variant_type(first), fn module, union ->
+      {:|, [], [variant_type(module), union]}
+    end)
+  end
+
+  defp variant_type(module), do: quote(do: unquote(module).t())
 end

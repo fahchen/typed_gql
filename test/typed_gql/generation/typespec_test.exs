@@ -40,11 +40,35 @@ defmodule TypedGql.Generation.TypespecTest do
              "nodes: [TypedGql.Test.TypespecFixture.ListNodes.Result.Nodes.Union.t() | nil]"
   end
 
+  # The document declares `... on User` and nothing else, so the dispatcher can
+  # only ever return a User and its type says so.
+  test "a union dispatcher's type is the union of the variants it declares" do
+    rendered = rendered_t(TypedGql.Test.TypespecFixture.ListNodes.Result.Nodes.Union)
+
+    assert rendered == "t() :: TypedGql.Test.TypespecFixture.ListNodes.Result.Nodes.User.t()"
+
+    refute Code.ensure_loaded?(TypedGql.Test.TypespecFixture.ListNodes.Result.Nodes.Post)
+  end
+
+  test "a dispatcher names every variant when the document declares more than one" do
+    rendered = rendered_t(TypedGql.Test.TypespecFixture.ListUsersAndPosts.Result.Nodes.Union)
+
+    assert rendered ==
+             "t() :: TypedGql.Test.TypespecFixture.ListUsersAndPosts.Result.Nodes.Post.t() | " <>
+               "TypedGql.Test.TypespecFixture.ListUsersAndPosts.Result.Nodes.User.t()"
+  end
+
   defp generated_t(module) do
     {:ok, types} = Code.Typespec.fetch_types(module)
 
     types
     |> Enum.map(fn {_kind, type} -> Macro.to_string(Code.Typespec.type_to_quoted(type)) end)
     |> Enum.find(&String.starts_with?(&1, "t() ::"))
+  end
+
+  # `Macro.to_string/1` breaks a long union across lines, so assertions read the
+  # one-line rendering rather than its wrapping.
+  defp rendered_t(module) do
+    module |> generated_t() |> String.split() |> Enum.join(" ")
   end
 end
