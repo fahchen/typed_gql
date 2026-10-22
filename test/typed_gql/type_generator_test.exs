@@ -941,8 +941,10 @@ defmodule TypedGql.TypeGeneratorTest do
       assert :id in shop.__schema__(:fields)
     end
 
-    # The inner `... on Node` sits under Named, which Post is not, so it never
-    # reaches Post: Post belongs to the top-level `... on Node` that does.
+    # Named covers only User, so the inner `... on Node` never reaches Post even
+    # though Node covers it. Post is the variant under test: the top-level
+    # `... on Node` is the only fragment that declares it, so that is its anchor.
+    # User is anchored at `... on Named`, the first fragment that reaches it.
     test "a variant is not anchored at a fragment an outer condition rules out" do
       tree =
         resolved_tree(
@@ -962,6 +964,50 @@ defmodule TypedGql.TypeGeneratorTest do
 
       assert %{line: 3} = variant(tree, "User").loc
       assert %{line: 6} = variant(tree, "Post").loc
+    end
+
+    # A condition on an interface covering every member of a union declares
+    # them all, each anchored at that one fragment.
+    test "a lone interface condition declares and anchors every member it covers" do
+      tree =
+        resolved_tree(
+          schema_with_two_interfaces(),
+          """
+          query {
+            search {
+              ... on Node { id }
+            }
+          }
+          """,
+          TypedGql.Test.LoneNodeAnchor
+        )
+
+      assert %{line: 3} = variant(tree, "User").loc
+      assert %{line: 3} = variant(tree, "Post").loc
+      assert [:id] = Enum.map(variant(tree, "Post").fields, & &1.name)
+    end
+
+    # The outer condition decides which members the inner one can reach, so a
+    # member only the inner condition covers is never declared.
+    test "a condition nested under one that rules a member out does not declare it" do
+      tree =
+        resolved_tree(
+          schema_with_two_interfaces(),
+          """
+          query {
+            search {
+              ... on Named {
+                ... on Node { id }
+              }
+            }
+          }
+          """,
+          TypedGql.Test.NestedOnlyAnchor
+        )
+
+      [union] = tree.children
+      assert Map.keys(union.typename_to_module) == ["User"]
+      assert %{line: 3} = variant(tree, "User").loc
     end
 
     # A spread's wrapper carries no location, so a located fragment naming the
