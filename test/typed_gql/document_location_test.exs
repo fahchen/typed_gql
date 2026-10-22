@@ -29,6 +29,12 @@ defmodule TypedGql.DocumentLocationTest do
       assert_located(Fixture.Inputs.CreatePostInput)
     end
 
+    # An earlier variable reaching the type as a field does not claim it.
+    test "a nested input type a variable names points at that variable" do
+      assert_located(Fixture.Inputs.CreateUserInput)
+      assert_located(Fixture.Inputs.ProfileInput)
+    end
+
     test "a union dispatcher points at the field whose type is abstract" do
       assert_located(Fixture.Search.Result.Search.Union)
     end

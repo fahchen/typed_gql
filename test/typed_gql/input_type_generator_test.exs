@@ -196,6 +196,30 @@ defmodule TypedGql.InputTypeGeneratorTest do
     end
   end
 
+  describe "a nested input type a variable also names" do
+    # $input reaches AddressInput as a field first, but $address names it, so
+    # it is generated once, for $address — TypedGql.DocumentLocationTest checks
+    # the location itself, which an in-memory module does not record.
+    test "is generated once, not again under the type that reaches it" do
+      operation =
+        parse!(
+          "mutation CreateUser($input: CreateUserInput!, $address: AddressInput) " <>
+            "{ createUser(input: $input) { name } }"
+        )
+
+      modules =
+        InputTypeGenerator.generate(operation, schema_with_nested_input(),
+          client_module: TypedGql.Test.Input.NamedNested,
+          caller_env: __ENV__
+        )
+
+      assert Enum.sort(modules) == [
+               TypedGql.Test.Input.NamedNested.Inputs.AddressInput,
+               TypedGql.Test.Input.NamedNested.Inputs.CreateUserInput
+             ]
+    end
+  end
+
   describe "deeply nested input types" do
     test "generates 3-level deep input with list and enum" do
       schema = schema_with_deep_input()

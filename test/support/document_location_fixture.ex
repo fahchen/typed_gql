@@ -137,6 +137,23 @@ defmodule TypedGql.Test.DocumentLocationFixture do
   }
   """)
 
+  # $user reaches ProfileInput first, as a field of CreateUserInput, but
+  # $profile names it, so the module belongs at $profile. The printer keeps a
+  # heredoc's variables on the signature line, so this one is a one-line sigil
+  # spanning lines, which the formatter leaves as written.
+  @named_nested __ENV__.line + 1
+  defgql(:named_nested, ~GQL"mutation NamedNested(
+  $user: CreateUserInput!
+  $profile: ProfileInput!
+) {
+  createUser(input: $user) {
+    id
+  }
+  updateProfile(input: $profile) {
+    id
+  }
+}")
+
   # Written in TypedGql.Test.QuotedDocumentMacro and carried here with
   # `location: :keep`, which keeps the file and line it was written at — so its
   # modules point there, not at this call. That file records the lines.
@@ -290,6 +307,8 @@ defmodule TypedGql.Test.DocumentLocationFixture do
       __MODULE__.SharedInput.Result.A => @shared_input + 2,
       __MODULE__.SharedInput.Result.B => @shared_input + 5,
       __MODULE__.Inputs.CreatePostInput => @create_post + 1,
+      __MODULE__.Inputs.CreateUserInput => @named_nested + 1,
+      __MODULE__.Inputs.ProfileInput => @named_nested + 2,
       __MODULE__.CrossFile.Result => @cross_file + 1,
       __MODULE__.CrossFile.Result.User => @cross_file + 2,
       __MODULE__.Multiline.Result => @multiline,

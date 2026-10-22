@@ -14,7 +14,8 @@ defmodule TypedGql.InputTypeGenerator do
 
   An input type has no location of its own — it comes from the schema, not from
   the document — so its module records the variable definition that referenced
-  it, and a nested input object records the variable that pulled it in.
+  it, and a nested input object records the variable that pulled it in, unless
+  a variable of its own names it.
 
   A type two `defgql`s share is generated once, by the first of them, and keeps
   that one's location: the second skips a module this compilation has already
@@ -67,14 +68,24 @@ defmodule TypedGql.InputTypeGenerator do
     # validates an embed's module at schema-compile time. This is where they are
     # created, so this is where they are located — at the variable definition
     # that named the type, since the type itself comes from the schema.
-    {modules, module_asts, _seen} =
+    named =
       operation.variable_definitions
       |> collect_input_type_names(schema)
-      |> Enum.reduce({[], [], MapSet.new()}, fn {type_name, loc}, collect_acc ->
+      |> Enum.map(fn {type_name, loc} ->
+        {input_module(inputs_module, type_name), type_name, loc}
+      end)
+
+    # A type a variable names belongs at that variable even when an earlier
+    # variable's type reaches it first as a field, so the nested walk treats
+    # every named type as already seen and leaves it to its own variable.
+    seen = MapSet.new(named, fn {module, _type_name, _loc} -> module end)
+
+    {modules, module_asts, _seen} =
+      Enum.reduce(named, {[], [], seen}, fn {module, type_name, loc}, collect_acc ->
         context =
           {schema, scalar_types, inputs_module, SourceAnchor.create_opts(caller_env, loc)}
 
-        collect_input_type(type_name, context, collect_acc)
+        create_input_type(module, type_name, context, collect_acc)
       end)
 
     GeneratorHelpers.create_modules(module_asts)
@@ -281,19 +292,36 @@ defmodule TypedGql.InputTypeGenerator do
 
   defp collect_input_type(
          type_name,
-         {schema, _scalar_types, inputs_module, _create_opts} = context,
+         {_schema, _scalar_types, inputs_module, _create_opts} = context,
          {mods, asts, seen}
        ) do
-    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-    module = Module.concat(inputs_module, Macro.camelize(type_name))
+    module = input_module(inputs_module, type_name)
 
-    if MapSet.member?(seen, module) or GeneratorHelpers.created?(module) do
+    if MapSet.member?(seen, module) do
       {mods, asts, seen}
     else
-      seen = MapSet.put(seen, module)
-      {:ok, type} = Schema.get_type(schema, type_name)
-      collect_module(module, type, context, {mods, asts, seen})
+      create_input_type(module, type_name, context, {mods, asts, MapSet.put(seen, module)})
     end
+  end
+
+  defp create_input_type(
+         module,
+         type_name,
+         {schema, _scalar_types, _inputs_module, _opts} = context,
+         acc
+       ) do
+    if GeneratorHelpers.created?(module) do
+      acc
+    else
+      {:ok, type} = Schema.get_type(schema, type_name)
+      collect_module(module, type, context, acc)
+    end
+  end
+
+  defp input_module(inputs_module, type_name) do
+    # Input type names from GraphQL schema, bounded set
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+    Module.concat(inputs_module, Macro.camelize(type_name))
   end
 
   defp collect_module(
