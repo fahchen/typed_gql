@@ -1469,9 +1469,7 @@ defmodule TypedGql.TypeGeneratorTest do
 
       # bio came from the $a copy and avatar from the $b copy; either can be
       # absent while the other is present, so neither may be non-null.
-      [union_node] = tree.children
-      user = Enum.find(union_node.children, &(&1.parent_type == "User"))
-      [profile_node] = user.children
+      [profile_node] = variant(tree, "User").children
 
       child_names = profile_node.fields |> Enum.map(& &1.name) |> Enum.sort()
       assert child_names == [:avatar, :bio]

@@ -479,20 +479,14 @@ defmodule TypedGql.TypeGenerator do
       {shared_fields, inline_fragments} =
         Enum.split_with(selections, &match?(%QueryField{}, &1))
 
-      case inline_fragments do
-        [] ->
-          resolve_abstract_fields(shared_fields, parent_type_name, parent_module, context, loc)
-
-        _fragments ->
-          resolve_union(
-            shared_fields,
-            inline_fragments,
-            parent_type_name,
-            parent_module,
-            context,
-            loc
-          )
-      end
+      resolve_union(
+        shared_fields,
+        inline_fragments,
+        parent_type_name,
+        parent_module,
+        context,
+        loc
+      )
     else
       resolve_object(selections, parent_type_name, parent_module, context, loc: loc)
     end
@@ -501,10 +495,8 @@ defmodule TypedGql.TypeGenerator do
   # No member is declared — only fields common to every possible type were
   # selected, or every fragment named a type the schema does not have — so no
   # per-variant struct is needed. `__typename` can still be any possible type.
-  defp resolve_abstract_fields(fields, parent_type_name, parent_module, context, loc) do
-    {:ok, parent} = Schema.get_type(context.schema, parent_type_name)
-
-    resolve_object(fields, parent_type_name, parent_module, context,
+  defp resolve_abstract_fields(fields, parent, parent_module, context, loc) do
+    resolve_object(fields, parent.name, parent_module, context,
       typename_values: parent.possible_types,
       loc: loc
     )
@@ -520,10 +512,8 @@ defmodule TypedGql.TypeGenerator do
     # field against a concrete member (`friend: Node` narrowing to `friend: User`
     # on User). Flattening against the type actually being resolved is what makes
     # the list the fields-only one the reducer below needs.
-    fields =
-      fields
-      |> member_selections(parent_type_name, context)
-      |> merge_fields()
+    {fields, _fragments} = member_selections(fields, parent_type_name, context)
+    fields = merge_fields(fields)
 
     {gen_fields, children} =
       Enum.reduce(fields, {[], []}, fn %QueryField{} = field, {fields_acc, children_acc} ->
@@ -802,16 +792,9 @@ defmodule TypedGql.TypeGenerator do
   defp faithful_many?(_field), do: false
 
   # A variant per type the document declares, not per possible type of the
-  # abstract parent: a member no fragment names has no fields of its own, so a
-  # struct for it costs a module per member and types the result as "any member"
-  # while the document only ever asked about some of them. A response carrying a
-  # member the document does not declare fails to decode instead of arriving with
-  # the shared fields alone — the honest answer, since the query cannot express
-  # what came back.
-  #
-  # A condition the schema does not declare (reachable only for a caller that
-  # skipped validation) declares nothing. With nothing declared the selection
-  # degrades to a plain object rather than to a dispatcher with no members.
+  # abstract parent: a member no fragment reaches has no fields of its own, and a
+  # response carrying one fails to decode rather than arriving with the shared
+  # fields alone. With nothing declared the selection degrades to a plain object.
   defp resolve_union(
          shared_fields,
          inline_fragments,
@@ -822,45 +805,30 @@ defmodule TypedGql.TypeGenerator do
        ) do
     {:ok, parent} = Schema.get_type(context.schema, parent_type_name)
 
-    case declared_type_names(inline_fragments, parent, context) do
-      [] ->
-        resolve_abstract_fields(shared_fields, parent_type_name, parent_module, context, loc)
+    # Schema order; the dispatcher's typespec sorts its variants anyway.
+    declared =
+      for type_name <- parent.possible_types,
+          {selections, [_fragment | _rest] = fragments} <-
+            [member_selections(inline_fragments, type_name, context)],
+          do: {type_name, shared_fields ++ selections, fragments}
 
-      declared ->
-        resolve_declared_union(
-          shared_fields,
-          inline_fragments,
-          declared,
-          parent,
-          parent_module,
-          context,
-          loc
-        )
+    case declared do
+      [] -> resolve_abstract_fields(shared_fields, parent, parent_module, context, loc)
+      declared -> resolve_declared_union(declared, parent, parent_module, context, loc)
     end
   end
 
-  defp resolve_declared_union(
-         shared_fields,
-         inline_fragments,
-         declared,
-         parent,
-         parent_module,
-         context,
-         loc
-       ) do
+  defp resolve_declared_union(declared, parent, parent_module, context, loc) do
     {variants, typename_to_module} =
-      Enum.map_reduce(declared, %{}, fn type_name, typename_to_module ->
-        merged_selections =
-          shared_fields ++ member_selections(inline_fragments, type_name, context)
-
+      Enum.map_reduce(declared, %{}, fn {type_name, selections, fragments}, typename_to_module ->
         # Member type names from schema, bounded set
         # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
         variant_module = Module.concat(parent_module, GeneratorHelpers.camelize(type_name))
 
         variant =
-          resolve_object(merged_selections, type_name, variant_module, context,
+          resolve_object(selections, type_name, variant_module, context,
             typename_values: parent.possible_types,
-            loc: variant_loc(inline_fragments, type_name, context) || loc
+            loc: variant_loc(fragments, type_name) || loc
           )
 
         {variant, Map.put(typename_to_module, type_name, variant_module)}
@@ -881,65 +849,13 @@ defmodule TypedGql.TypeGenerator do
     }
   end
 
-  # The concrete types the document names, in the order it names them: a
-  # condition on an object type declares that one type, and a condition on an
-  # abstract type declares every type the parent can produce that it covers.
-  # `... on Node` therefore still declares its members — the condition is what
-  # the document wrote — but `... on Named` over a union stops at the members
-  # Named actually covers. The intersection is what keeps a condition from
-  # declaring a member its own parent cannot produce.
-  defp declared_type_names(inline_fragments, parent, context) do
-    inline_fragments
-    |> Enum.flat_map(fn %InlineFragment{type_condition: condition} ->
-      condition_type_names(condition, context)
-    end)
-    |> Enum.filter(&(&1 in parent.possible_types))
-    |> Enum.uniq()
-  end
-
-  defp condition_type_names(%{name: name}, context) do
-    if Schema.abstract?(context.schema, name) do
-      {:ok, abstract} = Schema.get_type(context.schema, name)
-      abstract.possible_types
-    else
-      [name]
-    end
-  end
-
-  # A variant module belongs at the fragment that names its member — the whole
-  # `... on User`, not an abstract condition above it that happens to cover the
-  # same member — or, failing that, at the condition that first covers it. A
-  # member no fragment declares has no variant at all, so every variant has an
-  # answer here whenever validation ran; a caller that skipped it falls back to
-  # the field's own location. So does a member declared only through a named
-  # fragment spread, whose wrapper carries no location of its own.
-  defp variant_loc(inline_fragments, type_name, context) do
-    fragments = applicable_fragments(inline_fragments, type_name, context)
-
+  # A variant belongs at the fragment that names its member — `... on User`, not
+  # an abstract condition above it — or else at the first one that covers it. A
+  # spread's wrapper has no location, so a member only a spread declares stays
+  # with the field.
+  defp variant_loc(fragments, type_name) do
     Enum.find_value(fragments, &(&1.type_condition.name == type_name && SourceAnchor.loc(&1))) ||
       Enum.find_value(fragments, &SourceAnchor.loc/1)
-  end
-
-  # The fragments that reach `type_name`, depth first. A member can be named
-  # below the condition that covers it — `... on Node { ... on User { email } }`
-  # — and the module belongs at the fragment that named it rather than at the
-  # abstract one above. Only fragments that apply are descended into: in
-  # `... on Named { ... on Node { id } }` the inner Node never reaches a member
-  # Named rules out. Only abstract parents leave anything nested here:
-  # normalization flattens the inline fragments of an object parent into the
-  # parent itself.
-  defp applicable_fragments(selections, type_name, context) do
-    Enum.flat_map(selections, fn
-      %InlineFragment{} = fragment ->
-        if applies_to?(context.schema, fragment.type_condition.name, type_name) do
-          [fragment | applicable_fragments(fragment.selection_set.selections, type_name, context)]
-        else
-          []
-        end
-
-      %QueryField{} ->
-        []
-    end)
   end
 
   # Every variant gets a module named after its camelized typename, and the
@@ -964,26 +880,33 @@ defmodule TypedGql.TypeGenerator do
     end
   end
 
-  # Flattens the fragments that apply to `type_name` down to plain fields.
-  # A fragment applies when its condition names the member, or is an abstract
-  # type the member belongs to (`... on Node` over a union of Nodes). Recursing
-  # is what handles a fragment nested inside an abstract one, whose members were
-  # normalized against the abstract type and so are still inline fragments —
-  # resolve_object/5 only accepts fields.
+  # Flattens the fragments that reach `type_name` down to plain fields, and
+  # returns those fragments too, depth first. A fragment reaches the member when
+  # its condition names it or is an abstract type it belongs to. Only fragments
+  # that reach it are descended into, so in `... on Named { ... on Node { id } }`
+  # the inner Node never reaches a member Named rules out. Recursing handles a
+  # fragment nested in an abstract one, whose members are still inline fragments
+  # — resolve_object/5 only accepts fields.
   defp member_selections(selections, type_name, context) do
-    Enum.flat_map(selections, fn
-      %QueryField{} = field ->
-        [field]
+    {fields, fragments} =
+      Enum.flat_map_reduce(selections, [], fn
+        %QueryField{} = field, fragments ->
+          {[field], fragments}
 
-      %InlineFragment{} = fragment ->
-        if applies_to?(context.schema, fragment.type_condition.name, type_name) do
-          fragment.selection_set.selections
-          |> prepend_directives(fragment.directives)
-          |> member_selections(type_name, context)
-        else
-          []
-        end
-    end)
+        %InlineFragment{} = fragment, fragments ->
+          if applies_to?(context.schema, fragment.type_condition.name, type_name) do
+            {fields, nested} =
+              fragment.selection_set.selections
+              |> prepend_directives(fragment.directives)
+              |> member_selections(type_name, context)
+
+            {fields, Enum.reverse(nested, [fragment | fragments])}
+          else
+            {[], fragments}
+          end
+      end)
+
+    {fields, Enum.reverse(fragments)}
   end
 
   defp applies_to?(_schema, type_name, type_name), do: true
