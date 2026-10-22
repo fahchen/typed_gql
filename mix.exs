@@ -77,10 +77,13 @@ defmodule TypedGql.MixProject do
       source_url: @source_url,
       extras: [
         {"README.md", [title: "Introduction"]},
+        {"guides/writing-operations.md", [title: "Writing Operations"]},
+        {"guides/generated-types.md", [title: "Generated Modules and Types"]},
+        {"guides/unions-and-interfaces.md", [title: "Unions and Interfaces"]},
         {"guides/mapping-custom-scalars.md", [title: "Mapping Custom Scalars"]},
         {"guides/extending-requests-with-prepare-req.md",
          [title: "Customizing Requests with prepare_req"]},
-        {"guides/unions-and-interfaces.md", [title: "Unions and Interfaces"]},
+        {"guides/testing.md", [title: "Testing"]},
         {"LICENSE", [title: "License"]}
       ],
       groups_for_extras: [

@@ -51,6 +51,25 @@ member, and `nodes` is typed as their union:
 @type t() :: %Search.Result.Search.Nodes.Repository{name_with_owner: String.t()}
 ```
 
+Each element decodes to the struct its `__typename` names, so a result is read
+by matching on the variant:
+
+```elixir
+{:ok, result} = MyApp.GitHub.search(%{q: "elixir"})
+
+# `search` and `nodes` are both nullable, so read them nil-safely
+nodes = result.data |> get_in([:search, :nodes]) |> List.wrap()
+
+Enum.each(nodes, fn
+  %MyApp.GitHub.Search.Result.Search.Nodes.User{} = user -> IO.puts(user.name)
+  %MyApp.GitHub.Search.Result.Search.Nodes.Repository{} = repo -> IO.puts(repo.name_with_owner)
+  nil -> :skip
+end)
+```
+
+Selecting `__typename` also puts it on the struct, as a snake_cased atom
+(`:user`, `:repository`).
+
 A condition on an abstract type declares every member of the field's type that
 it covers. `RepositoryOwner` is implemented by `Organization` and `User`, so
 this declares those two and no other `SearchResultItem` member:

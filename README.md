@@ -10,11 +10,12 @@ Compile-time GraphQL client for Elixir. Parses and validates queries during comp
 - **Compile-time validation** — Syntax errors, schema mismatches, and deprecated usage caught at `mix compile`, with errors pointing to file:line:column in your Elixir source
 - **Minimal code generation** — Only generates modules for types actually referenced in your queries, not the entire schema
 - **Zero runtime parsing** — All GraphQL parsing happens at compile time
-- **Typed responses** — JSON responses are cast into typed Ecto embedded schemas, accessible via dot notation, `[:field]`, and `get_in`
-- **Typed variables** — Input validation via Ecto changesets with generated `params()` type
-- **Union / Interface support** — Automatic type dispatch, no extra fields needed
-- **Req integration** — Full access to Req's middleware/plugin system, test with `Req.Test` directly
-- **Response metadata** — Capture arbitrary response metadata (e.g. GraphQL `extensions`) via `prepare_req/1` callback and `Result.assigns`
+- **Typed responses** — JSON responses are cast into typed Ecto embedded schemas, accessible via dot notation, `[:field]`, and `get_in` ([Generated Modules and Types](guides/generated-types.md))
+- **Typed variables** — Input validation via Ecto changesets with generated `params()` type ([Writing Operations](guides/writing-operations.md))
+- **Union / Interface support** — Automatic type dispatch on `__typename` ([Unions and Interfaces](guides/unions-and-interfaces.md))
+- **Custom scalars** — Map any scalar to an Ecto type; common ones are built in ([Mapping Custom Scalars](guides/mapping-custom-scalars.md))
+- **Req integration** — Full access to Req's middleware/plugin system, test with `Req.Test` directly ([Testing](guides/testing.md))
+- **Response metadata** — Capture arbitrary response metadata (e.g. GraphQL `extensions`) via `prepare_req/1` callback and `Result.assigns` ([Customizing Requests](guides/extending-requests-with-prepare-req.md))
 - **Configurable JSON library** — Defaults to Elixir 1.18+ built-in `JSON`, falls back to `Jason`, or set your own via `:json_library`
 - **Auto-generated docs** — `defgql` functions include `@doc` with variables, types, and generated module listing
 
@@ -40,6 +41,14 @@ mix typed_gql.download_schema \
   --output priv/schemas/schema.json \
   --header "Authorization: Bearer token123"
 ```
+
+`mix typed_gql.download_schema` saves the schema via introspection:
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `--endpoint` / `-e` | yes | GraphQL endpoint URL |
+| `--output` / `-o` | yes | File path to save the schema JSON |
+| `--header` / `-h` | no | HTTP header in `"Key: Value"` format (repeatable) |
 
 ### 2. Define a client module
 
@@ -181,374 +190,7 @@ MyApp.GitHub.get_user(%{login: "octocat"},
 )
 ```
 
-## The `~GQL` Sigil and Formatter
-
-The `~GQL` sigil marks GraphQL strings for automatic formatting by `mix format`. Plain strings still work with `defgql` — `~GQL` is optional.
-
-Add the formatter plugin to your `.formatter.exs`:
-
-```elixir
-[
-  plugins: [TypedGql.Formatter],
-  # ...
-]
-```
-
-Or via dependency import:
-
-```elixir
-[
-  import_deps: [:typed_gql],
-  # ...
-]
-```
-
-### Before / After
-
-```elixir
-# Before
-defgql :get_user, ~GQL"query GetUser($id: ID!) { user(id: $id) { name email posts { title } } }"
-
-# After mix format
-defgql :get_user, ~GQL"""
-  query GetUser($id: ID!) {
-    user(id: $id) {
-      name
-      email
-      posts {
-        title
-      }
-    }
-  }
-"""
-```
-
-## Custom Scalars
-
-Map GraphQL custom scalars to Ecto types via the `:scalars` option:
-
-```elixir
-use TypedGql,
-  otp_app: :my_app,
-  source: "schema.json",
-  scalars: %{
-    "GitObjectID" => :string,
-    "Money"       => MyApp.Types.Money
-  }
-```
-
-A scalar maps to a plain Ecto type or to any module implementing the `Ecto.Type`
-behaviour. Widely used scalars — `DateTime`, `Date`, `JSON`, `URI`, `URL`,
-`BigInt`, `HTML`, `Base64String` — are already mapped (`DateTime` to
-`TypedGql.Types.DateTime`), so only schema-specific ones need an entry, and a
-mapping you give for a name that already has one replaces it.
-
-See the [custom scalars guide](guides/mapping-custom-scalars.md) for the full
-list of built-ins and for which `Ecto.Type` callbacks run on each path.
-
-## Enums
-
-GraphQL enums are automatically converted to snake_cased atoms:
-
-```elixir
-# GraphQL: enum Role { ADMIN, READ_ONLY }
-# Elixir:  :admin, :read_only
-```
-
-Loading is case-insensitive — `"ADMIN"`, `"admin"`, and `"Admin"` all resolve to `:admin`.
-
-## Unions and Interfaces
-
-Union and interface types are resolved at decode time using the `__typename` field:
-
-```elixir
-defgql :search, ~GQL"""
-  query Search($q: String!) {
-    search(query: $q) {
-      ... on User {
-        name
-      }
-      ... on Repository {
-        fullName
-      }
-    }
-  }
-"""
-```
-
-```elixir
-{:ok, result} = MyApp.GitHub.search(%{q: "elixir"})
-
-Enum.each(result.data.search, fn
-  %MyApp.GitHub.Search.Result.Search.User{} = user -> IO.puts(user.name)
-  %MyApp.GitHub.Search.Result.Search.Repository{} = repo -> IO.puts(repo.full_name)
-end)
-
-# __typename is also available as a snake_cased atom
-hd(result.data.search).__typename  #=> :user
-```
-
-A struct is generated only for the types the document declares, through
-`... on User` or an abstract condition that covers them. A response carrying a
-member the document never declares fails to decode. See the
-[unions and interfaces guide](guides/unions-and-interfaces.md) for the rules.
-
-## Field Aliases
-
-GraphQL aliases affect both the struct field name and the module path:
-
-```elixir
-defgql :get_account, ~GQL"""
-  query {
-    account: user(login: "alice") {
-      displayName: name
-    }
-  }
-"""
-
-{:ok, result} = MyApp.GitHub.get_account()
-result.data.account.display_name  # alias becomes the field name
-```
-
-## Mutations and Input Types
-
-`defgql` works the same for mutations. GraphQL input object types become
-shared modules under `Client.Inputs.*`:
-
-```elixir
-defgql :create_issue, ~GQL"""
-  mutation CreateIssue($input: CreateIssueInput!) {
-    createIssue(input: $input) {
-      issue {
-        number
-        title
-        state
-      }
-    }
-  }
-"""
-```
-
-```elixir
-# Plain maps are validated against the generated input schema.
-# Params use the snake_cased field names, not the GraphQL spelling.
-{:ok, result} =
-  MyApp.GitHub.create_issue(%{input: %{repository_id: "R_1", title: "Bug"}})
-
-result.data.create_issue.issue.state  #=> :open
-
-# Missing required fields fail before any request is sent
-{:error, changeset} = MyApp.GitHub.create_issue(%{input: %{}})
-Ecto.Changeset.traverse_errors(changeset.changes.input, fn {msg, _opts} -> msg end)
-#=> %{repository_id: ["can't be blank"], title: ["can't be blank"]}
-```
-
-The generated input module can also be used directly — `build/1` returns
-`{:ok, struct}` or `{:error, changeset}`, and nested input objects are
-embedded:
-
-```elixir
-{:ok, input} =
-  MyApp.GitHub.Inputs.CreateIssueInput.build(%{
-    repository_id: "R_1",
-    title: "Bug",
-    body: "Steps to reproduce...",
-    label_ids: ["L_1", "L_2"]
-  })
-
-{:ok, result} = MyApp.GitHub.create_issue(%{input: input})
-```
-
-Input modules are shared across the whole client, so two operations using
-`CreateIssueInput` refer to the same module. See
-`examples/github_client.exs` for a runnable version.
-
-## Variables
-
-Each operation with variables gets a `Client.FnName.Variables` module. Calls
-run the caller's map through it before any request is sent, and it can be used
-standalone to validate or inspect a payload:
-
-```elixir
-# Same validation the client performs on every call
-{:ok, vars} = MyApp.GitHub.GetUser.Variables.build(%{id: "U_1"})
-{:error, changeset} = MyApp.GitHub.GetUser.Variables.build(%{})
-Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
-#=> %{id: ["can't be blank"]}
-
-# Params use the snake_cased names; the GraphQL name is kept for serialization
-MyApp.GitHub.GetUser.Variables.__schema__(:fields)  #=> [:id]
-```
-
-Variables are per-operation, so two operations declaring `$id: ID!` get
-separate modules — unlike input types, which are shared.
-
-## Generated Modules
-
-Each `defgql` generates typed Ecto embedded schema modules at compile time. Given `defgql :get_user` inside `MyApp.GitHub`:
-
-| Type | Pattern | Example |
-|------|---------|---------|
-| Fragment | `Client.Fragments.Name` | `MyApp.GitHub.Fragments.UserFields` |
-| Result | `Client.FnName.Result.Field...` | `MyApp.GitHub.GetUser.Result.User` |
-| Nested field | `...Result.Field.NestedField` | `MyApp.GitHub.GetUser.Result.User.Posts` |
-| Union variant | `...Result.Field.TypeName` | `MyApp.GitHub.Search.Result.Search.User` |
-| Input types | `Client.Inputs.TypeName` | `MyApp.GitHub.Inputs.CreateIssueInput` |
-| Variables | `Client.FnName.Variables` | `MyApp.GitHub.GetUser.Variables` |
-
-### Naming rules
-
-- Function name is CamelCased: `:get_user` -> `GetUser`
-- Struct field names are snake_cased: `userName` -> `:user_name`
-- Field aliases override both field name and module path: `author: user { ... }` -> field `:author`, module `...Result.Author`
-- Fragment modules live under `Client.Fragments.*`
-- Input types are shared across operations under `Client.Inputs.*`
-- Variables are per-operation under `Client.FnName.Variables`
-
-### Example
-
-```elixir
-defmodule MyApp.GitHub do
-  use TypedGql, otp_app: :my_app, source: "schema.json"
-
-  deffragment ~GQL"""
-    fragment PostFields on Post {
-      title
-      body
-    }
-  """
-
-  defgql :get_user, ~GQL"""
-    query GetUser($id: ID!) {
-      author: user(id: $id) {
-        name
-        posts {
-          ...PostFields
-        }
-      }
-    }
-  """
-end
-
-# Generated modules:
-# MyApp.GitHub.Fragments.PostFields         — %{title: String.t(), body: String.t()}
-# MyApp.GitHub.GetUser.Result               — %{author: Author.t()}
-# MyApp.GitHub.GetUser.Result.Author        — %{name: String.t(), posts: [Posts.t()]}
-# MyApp.GitHub.GetUser.Result.Author.Posts   — %{title: String.t(), body: String.t()}
-# MyApp.GitHub.GetUser.Variables            — %{id: String.t()}
-```
-
-The `posts: [Posts.t()]` above assumes the schema declares it `[Post!]!`. A list
-typespec mirrors the schema's nullability at every level — `[Post]` generates
-`[Posts.t() | nil] | nil` — and a nullable list's struct default is `nil`, not `[]`.
-
-## Access Behaviour
-
-All generated schemas implement the `Access` behaviour, so you can use bracket syntax and `get_in/2` alongside dot notation:
-
-```elixir
-{:ok, result} = MyApp.GitHub.get_user(%{login: "octocat"})
-
-# Dot notation
-result.data.user.name
-
-# Bracket syntax
-result.data.user[:name]
-
-# Dynamic / nested access
-get_in(result.data, [:user, :name])
-```
-
-This is powered by `TypedStructor.Plugins.Access`, which is registered in every generated `typed_embedded_schema` block.
-
-## Customizing Requests (`prepare_req/1`)
-
-Each client module has an overridable `prepare_req/1` callback that receives the `%Req.Request{}` before it is sent — attach Req steps, add headers, or capture response metadata into `Result.assigns`:
-
-```elixir
-def prepare_req(req) do
-  Req.Request.append_response_steps(req,
-    request_id: fn {req, resp} ->
-      {req, TypedGql.Result.put_resp_assign(resp, :request_id, Req.Response.get_header(resp, "x-request-id"))}
-    end
-  )
-end
-```
-
-See the [Customizing Requests with `prepare_req`](guides/extending-requests-with-prepare-req.md) guide for more details.
-
-## Testing
-
-Use `Req.Test` to stub HTTP responses without any network calls:
-
-```elixir
-# config/test.exs
-config :my_app, MyApp.GitHub,
-  req_options: [plug: {Req.Test, MyApp.GitHub}]
-```
-
-```elixir
-test "get_user returns user data" do
-  Req.Test.stub(MyApp.GitHub, fn conn ->
-    Req.Test.json(conn, %{
-      "data" => %{"user" => %{"name" => "Alice", "bio" => "Elixirist"}}
-    })
-  end)
-
-  assert {:ok, result} = MyApp.GitHub.get_user(%{login: "alice"})
-  assert result.data.user.name == "Alice"
-end
-```
-
-### Telling requests apart
-
-When several `defgql` functions share one stub, attach
-[`TypedGql.OperationInfo`](https://hexdocs.pm/typed_gql/TypedGql.OperationInfo.html)
-so the stub can branch on which function made the request:
-
-```elixir
-defmodule MyApp.GitHub do
-  use TypedGql, otp_app: :my_app, source: "priv/schemas/github.json"
-
-  # opt in for tests only
-  if Mix.env() == :test do
-    def prepare_req(req), do: TypedGql.OperationInfo.attach(req)
-  end
-
-  # ...
-end
-```
-
-```elixir
-test "page loads user and posts" do
-  Req.Test.expect(MyApp.GitHub, 2, fn conn ->
-    case TypedGql.OperationInfo.get(conn).function do
-      "get_user" -> Req.Test.json(conn, %{"data" => %{"user" => %{"name" => "Alice"}}})
-      "list_posts" -> Req.Test.json(conn, %{"data" => %{"posts" => []}})
-    end
-  end)
-
-  # ... code that calls both MyApp.GitHub.get_user/1 and list_posts/1
-end
-```
-
-## Mix Tasks
-
-### `mix typed_gql.download_schema`
-
-Downloads a GraphQL schema via introspection and saves it as JSON.
-
-```bash
-mix typed_gql.download_schema --endpoint URL --output PATH [--header "Key: Value"]
-```
-
-| Option | Required | Description |
-|--------|----------|-------------|
-| `--endpoint` / `-e` | yes | GraphQL endpoint URL |
-| `--output` / `-o` | yes | File path to save the schema JSON |
-| `--header` / `-h` | no | HTTP header in `"Key: Value"` format (repeatable) |
-
-## `use TypedGql` Options
+### `use TypedGql` options
 
 | Option | Required | Description |
 |--------|----------|-------------|
@@ -559,7 +201,7 @@ mix typed_gql.download_schema --endpoint URL --output PATH [--header "Key: Value
 | `:scalars` | no | Map of GraphQL scalar name to Ecto type (default: `%{}`) |
 | `:generation_plugins` | no | Extra `TypedGql.Generation.Plugin` modules, run after the built-in ones |
 
-## JSON Library
+### JSON library
 
 Defaults to Elixir 1.18+ built-in `JSON`, falls back to `Jason`. To override:
 
@@ -568,6 +210,15 @@ config :typed_gql, :json_library, Jason
 ```
 
 Any module implementing `encode!/1` and `decode/1` works.
+
+## Guides
+
+- [Writing Operations](guides/writing-operations.md) — the `~GQL` sigil and formatter, field aliases, variables, mutations and input types
+- [Generated Modules and Types](guides/generated-types.md) — module layout, naming rules, enums, `Access`
+- [Unions and Interfaces](guides/unions-and-interfaces.md) — which variants are generated and how they are typed
+- [Mapping Custom Scalars](guides/mapping-custom-scalars.md) — built-in scalars and writing your own `Ecto.Type`
+- [Customizing Requests with `prepare_req`](guides/extending-requests-with-prepare-req.md) — Req steps, headers, response metadata
+- [Testing](guides/testing.md) — stubbing with `Req.Test` and telling requests apart
 
 ## Requirements
 
