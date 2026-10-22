@@ -55,7 +55,7 @@ end
 # MyApp.GitHub.Fragments.PostFields         — %{title: String.t(), body: String.t()}
 # MyApp.GitHub.GetUser.Result               — %{author: Author.t()}
 # MyApp.GitHub.GetUser.Result.Author        — %{name: String.t(), posts: [Posts.t()]}
-# MyApp.GitHub.GetUser.Result.Author.Posts   — %{title: String.t(), body: String.t()}
+# MyApp.GitHub.GetUser.Result.Author.Posts  — %{title: String.t(), body: String.t()}
 # MyApp.GitHub.GetUser.Variables            — %{id: String.t()}
 ```
 

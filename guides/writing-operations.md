@@ -80,6 +80,18 @@ Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
 MyApp.GitHub.GetUser.Variables.__schema__(:fields)  #=> [:id]
 ```
 
+The module also defines a `params()` type for the map it accepts — non-null
+variables are `required` keys, nullable ones `optional` — and the generated
+function's `@spec` takes it, so Dialyzer checks call sites:
+
+```elixir
+@type params() :: %{required(:id) => String.t()}
+@spec get_user(MyApp.GitHub.GetUser.Variables.params(), keyword()) :: ...
+```
+
+Input modules define `params()` the same way, and a variable of an input type
+refers to it.
+
 Variables are per-operation, so two operations declaring `$id: ID!` get
 separate modules — unlike input types, which are shared.
 

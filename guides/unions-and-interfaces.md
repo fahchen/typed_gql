@@ -57,7 +57,10 @@ by matching on the variant:
 ```elixir
 {:ok, result} = MyApp.GitHub.search(%{q: "elixir"})
 
-Enum.each(result.data.search.nodes, fn
+# `search` and `nodes` are both nullable, so read them nil-safely
+nodes = result.data |> get_in([:search, :nodes]) |> List.wrap()
+
+Enum.each(nodes, fn
   %MyApp.GitHub.Search.Result.Search.Nodes.User{} = user -> IO.puts(user.name)
   %MyApp.GitHub.Search.Result.Search.Nodes.Repository{} = repo -> IO.puts(repo.name_with_owner)
   nil -> :skip
