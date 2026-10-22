@@ -20,6 +20,7 @@ defmodule TypedGql.TypeGeneratorTest do
               TypedGql.Test.DiamondFragments.Search.Result.Search.User,
               TypedGql.Test.InterfaceNoTypename.GetNode.Result.Node.AppSubscription,
               TypedGql.Test.InterfaceNoTypename.GetNode.Result.Node.Shop,
+              TypedGql.Test.SelfCondition.GetNode.Result.Node.Shop,
               TypedGql.Test.Isolation.GetUser.Result.User,
               TypedGql.Test.Isolation.ListUsers.Result.User,
               TypedGql.Test.ListEmbed.GetUser.Result.User,
@@ -916,6 +917,28 @@ defmodule TypedGql.TypeGeneratorTest do
                result.node
 
       assert result.node.status == "ACTIVE"
+    end
+
+    # `... on Node` over a Node field is the field's own fields, as if written
+    # unwrapped, so it declares no member: only Shop, which is named, gets one.
+    test "a condition on the interface field's own type declares no member" do
+      schema = schema_with_interface_no_typename()
+
+      operation =
+        parse!("query($id: ID!) { node(id: $id) { ... on Node { id } ... on Shop { name } } }")
+
+      modules =
+        TypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.SelfCondition,
+          function_name: :get_node,
+          caller_env: __ENV__
+        )
+
+      shop = TypedGql.Test.SelfCondition.GetNode.Result.Node.Shop
+
+      assert shop in modules
+      refute TypedGql.Test.SelfCondition.GetNode.Result.Node.AppSubscription in modules
+      assert :id in shop.__schema__(:fields)
     end
 
     # The inner `... on Node` sits under Named, which Post is not, so it never

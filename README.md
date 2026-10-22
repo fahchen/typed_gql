@@ -288,32 +288,10 @@ end)
 hd(result.data.search).__typename  #=> :user
 ```
 
-A variant struct is generated for each type the document declares — `... on User`
-declares `User` — and for each type an abstract condition covers, so
-`... on Node { id }` over a union of `User | Repository` declares both. Shared
-fields (outside fragments) are merged into every variant's struct.
-
-A member the document never declares gets no struct, and a response carrying one
-fails to load rather than decoding to a struct that could only hold the shared
-fields. Declare it — `... on Repository { __typename }` is enough — to make it
-representable.
-
-A selection that declares no member at all, only shared fields, generates one
-plain embedded schema instead of a dispatcher:
-
-```elixir
-defgql :node_types, ~GQL"""
-  query NodeTypes($ids: [ID!]!) {
-    nodes(ids: $ids) {
-      __typename
-    }
-  }
-"""
-```
-
-The dispatcher's typespec names the variants it can return
-(`...Result.Search.Union.t()  #=> User.t() | Repository.t()`), so a result's own
-type says what can come back rather than `struct()`.
+A struct is generated only for the types the document declares, through
+`... on User` or an abstract condition that covers them. A response carrying a
+member the document never declares fails to decode. See the
+[unions and interfaces guide](guides/unions-and-interfaces.md) for the rules.
 
 ## Field Aliases
 

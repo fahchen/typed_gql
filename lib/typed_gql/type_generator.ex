@@ -498,8 +498,9 @@ defmodule TypedGql.TypeGenerator do
     end
   end
 
-  # Only fields common to every possible type were selected, so no per-variant
-  # struct is needed — but `__typename` can still be any of the possible types.
+  # No member is declared — only fields common to every possible type were
+  # selected, or every fragment named a type the schema does not have — so no
+  # per-variant struct is needed. `__typename` can still be any possible type.
   defp resolve_abstract_fields(fields, parent_type_name, parent_module, context, loc) do
     {:ok, parent} = Schema.get_type(context.schema, parent_type_name)
 

@@ -80,6 +80,7 @@ defmodule TypedGql.MixProject do
         {"guides/mapping-custom-scalars.md", [title: "Mapping Custom Scalars"]},
         {"guides/extending-requests-with-prepare-req.md",
          [title: "Customizing Requests with prepare_req"]},
+        {"guides/unions-and-interfaces.md", [title: "Unions and Interfaces"]},
         {"LICENSE", [title: "License"]}
       ],
       groups_for_extras: [
