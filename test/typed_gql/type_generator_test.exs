@@ -17,8 +17,10 @@ defmodule TypedGql.TypeGeneratorTest do
               TypedGql.Test.FragmentSpreadBody.Fragments.UserDetails,
               TypedGql.Test.SharedFrag.Fragments.NodeFields,
               TypedGql.Test.UnionFrag.Fragments.SearchFields.User,
+              TypedGql.Test.DiamondFragments.Search.Result.Search.User,
               TypedGql.Test.InterfaceNoTypename.GetNode.Result.Node.AppSubscription,
               TypedGql.Test.InterfaceNoTypename.GetNode.Result.Node.Shop,
+              TypedGql.Test.SelfCondition.GetNode.Result.Node.Shop,
               TypedGql.Test.Isolation.GetUser.Result.User,
               TypedGql.Test.Isolation.ListUsers.Result.User,
               TypedGql.Test.ListEmbed.GetUser.Result.User,
@@ -39,12 +41,12 @@ defmodule TypedGql.TypeGeneratorTest do
               TypedGql.Test.UnionField.Search.Result.Result,
               TypedGql.Test.UnionSharedOnly.Search.Result.Search,
               TypedGql.Test.PartialUnion.Search.Result,
-              TypedGql.Test.PartialUnion.Search.Result.Search.Post,
               TypedGql.Test.AbstractCondition.Search.Result,
               TypedGql.Test.AbstractCondition.Search.Result.Search.Post,
               TypedGql.Test.SpreadCondition.Search.Result.Search.Post,
               TypedGql.Test.SpreadCondition.Search.Result.Search.User,
-              TypedGql.Test.GhostCondition.Search.Result.Search.User,
+              TypedGql.Test.GhostCondition.Search.Result.Search,
+              TypedGql.Test.GhostAlongside.Search.Result.Search.User,
               TypedGql.Test.UnusableTypename.Search.Result,
               TypedGql.Test.UnusableTypename.Search.Result.Search.User,
               TypedGql.Test.RepeatedUnion.Search.Result.Search.Post,
@@ -60,7 +62,6 @@ defmodule TypedGql.TypeGeneratorTest do
               TypedGql.Test.ImplementedInterface.GetNode.Result,
               TypedGql.Test.ImplementedInterface.GetNode.Result.Node,
               TypedGql.Test.MergedSubSelections.Search.Result.Search.User.Profile,
-              TypedGql.Test.PartialInterface.Search.Result.Search.Post,
               TypedGql.Test.PartialInterface.Search.Result.Search.User,
               TypedGql.Test.TransitiveInterface.GetNode.Result,
               TypedGql.Test.TransitiveInterface.GetNode.Result.Node,
@@ -74,6 +75,7 @@ defmodule TypedGql.TypeGeneratorTest do
   alias TypedGql.Schema.Field, as: SchemaField
   alias TypedGql.Schema.Type
   alias TypedGql.Schema.TypeRef
+  alias TypedGql.SourceAnchor
   alias TypedGql.Test.SchemaHelper
   alias TypedGql.TypeGenerator
 
@@ -437,10 +439,13 @@ defmodule TypedGql.TypeGeneratorTest do
       assert TypedGql.Test.UnionGrid.Search.Result.Grid.User in modules
       assert TypedGql.Test.UnionGrid.Search.Result.Grid.Post in modules
 
-      assert {:array, {:array, {:parameterized, {union_module, _params}}}} =
+      assert {:array, {:array, {:parameterized, {TypedGql.Types.Union, params}}}} =
                TypedGql.Test.UnionGrid.Search.Result.__schema__(:type, :grid)
 
-      assert union_module == TypedGql.Test.UnionGrid.Search.Result.Grid.Union
+      assert params.typename_to_module == %{
+               "User" => TypedGql.Test.UnionGrid.Search.Result.Grid.User,
+               "Post" => TypedGql.Test.UnionGrid.Search.Result.Grid.Post
+             }
 
       json = %{"grid" => [[%{"__typename" => "User", "email" => "a@b.com"}, nil], nil]}
       result = TypedGql.ResponseDecoder.decode!(TypedGql.Test.UnionGrid.Search.Result, json)
@@ -678,36 +683,32 @@ defmodule TypedGql.TypeGeneratorTest do
       assert :title in post_fields
     end
 
-    test "a member type named Union collides with the dispatcher and is rejected" do
-      schema =
-        update_in(
-          schema_with_union(),
-          [Access.key!(:types)],
-          fn types ->
-            types
-            |> put_in(["SearchResult", Access.key!(:possible_types)], ["User", "Union"])
-            |> Map.put("Union", %Type{
-              kind: :object,
-              name: "Union",
-              fields: %{
-                "id" => %SchemaField{
-                  name: "id",
-                  type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :scalar, name: "ID"}}
-                }
-              }
-            })
-          end
-        )
+    test "two members whose names camelize alike are rejected" do
+      operation =
+        parse!("query { search { __typename ... on Foo_bar { id } ... on FooBar { id } } }")
 
-      operation = parse!("query { search { __typename ... on User { email } } }")
-
-      assert_raise CompileError, ~r/\(union dispatcher\) and Union both name/, fn ->
-        TypeGenerator.generate(operation, schema,
-          client_module: TypedGql.Test.UnionNameCollision,
+      assert_raise CompileError, ~r/FooBar and Foo_bar both name/, fn ->
+        TypeGenerator.generate(operation, schema_with_union_members(["Foo_bar", "FooBar"]),
+          client_module: TypedGql.Test.VariantNameCollision,
           function_name: :search,
           caller_env: __ENV__
         )
       end
+    end
+
+    # No dispatcher module takes the name any more, so a member may.
+    test "a member type named Union is an ordinary variant" do
+      operation = parse!("query { search { __typename ... on Union { id } } }")
+
+      modules =
+        TypeGenerator.generate(operation, schema_with_union_members(["User", "Union"]),
+          client_module: TypedGql.Test.UnionNamedMember,
+          function_name: :search,
+          caller_env: __ENV__
+        )
+
+      assert TypedGql.Test.UnionNamedMember.Search.Result.Search.Union in modules
+      assert :id in TypedGql.Test.UnionNamedMember.Search.Result.Search.Union.__schema__(:fields)
     end
 
     test "a union selected without inline fragments generates a plain object" do
@@ -770,11 +771,15 @@ defmodule TypedGql.TypeGeneratorTest do
       fields = result_module.__schema__(:fields)
       assert :search in fields
 
-      # A depth-1 list of a union stays one array around the dispatch type.
-      assert {:array, {:parameterized, {union_module, _params}}} =
+      # A depth-1 list of a union stays one array around the dispatch type, which
+      # is the library's own, configured with the variants.
+      assert {:array, {:parameterized, {TypedGql.Types.Union, params}}} =
                result_module.__schema__(:type, :search)
 
-      assert union_module == Module.safe_concat(result_module, "Search.Union")
+      assert params.typename_to_module == %{
+               "User" => Module.safe_concat(result_module, "Search.User"),
+               "Post" => Module.safe_concat(result_module, "Search.Post")
+             }
     end
 
     test "end-to-end decode with union field" do
@@ -917,6 +922,125 @@ defmodule TypedGql.TypeGeneratorTest do
       assert result.node.status == "ACTIVE"
     end
 
+    # `... on Node` over a Node field is the field's own fields, as if written
+    # unwrapped, so it declares no member: only Shop, which is named, gets one.
+    test "a condition on the interface field's own type declares no member" do
+      schema = schema_with_interface_no_typename()
+
+      operation =
+        parse!("query($id: ID!) { node(id: $id) { ... on Node { id } ... on Shop { name } } }")
+
+      modules =
+        TypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.SelfCondition,
+          function_name: :get_node,
+          caller_env: __ENV__
+        )
+
+      shop = TypedGql.Test.SelfCondition.GetNode.Result.Node.Shop
+
+      assert shop in modules
+      refute TypedGql.Test.SelfCondition.GetNode.Result.Node.AppSubscription in modules
+      assert :id in shop.__schema__(:fields)
+    end
+
+    # Named covers only User, so the inner `... on Node` never reaches Post even
+    # though Node covers it. Post is the variant under test: the top-level
+    # `... on Node` is the only fragment that declares it, so that is its anchor.
+    # User is anchored at `... on Named`, the first fragment that reaches it.
+    test "a variant is not anchored at a fragment an outer condition rules out" do
+      tree =
+        resolved_tree(
+          schema_with_two_interfaces(),
+          """
+          query {
+            search {
+              ... on Named {
+                ... on Node { id }
+              }
+              ... on Node { id }
+            }
+          }
+          """,
+          TypedGql.Test.RuledOutAnchor
+        )
+
+      assert %{line: 3} = variant(tree, "User").loc
+      assert %{line: 6} = variant(tree, "Post").loc
+    end
+
+    # A condition on an interface covering every member of a union declares
+    # them all, each anchored at that one fragment.
+    test "a lone interface condition declares and anchors every member it covers" do
+      tree =
+        resolved_tree(
+          schema_with_two_interfaces(),
+          """
+          query {
+            search {
+              ... on Node { id }
+            }
+          }
+          """,
+          TypedGql.Test.LoneNodeAnchor
+        )
+
+      assert %{line: 3} = variant(tree, "User").loc
+      assert %{line: 3} = variant(tree, "Post").loc
+      assert [:id] = Enum.map(variant(tree, "Post").fields, & &1.name)
+    end
+
+    # The outer condition decides which members the inner one can reach, so a
+    # member only the inner condition covers is never declared.
+    test "a condition nested under one that rules a member out does not declare it" do
+      tree =
+        resolved_tree(
+          schema_with_two_interfaces(),
+          """
+          query {
+            search {
+              ... on Named {
+                ... on Node { id }
+              }
+            }
+          }
+          """,
+          TypedGql.Test.NestedOnlyAnchor
+        )
+
+      [union] = tree.children
+      assert Map.keys(union.typename_to_module) == ["User"]
+      assert %{line: 3} = variant(tree, "User").loc
+    end
+
+    # A spread's wrapper carries no location, so a located fragment naming the
+    # same member after it is where the variant belongs.
+    test "a variant declared first by a spread is anchored at a located fragment" do
+      {:ok, %{definitions: [fragment]}} =
+        TypedGql.Parser.parse("fragment UserBits on User { email }")
+
+      operation =
+        located!("""
+        query {
+          search {
+            ...UserBits
+            ... on User { email }
+          }
+        }
+        """)
+
+      TypeGenerator.generate(operation, schema_with_union(),
+        client_module: TypedGql.Test.SpreadFirstAnchor,
+        function_name: :search,
+        fragments: %{"UserBits" => fragment},
+        generation_plugins: [CaptureTreePlugin],
+        caller_env: __ENV__
+      )
+
+      assert_received {:resolved_tree, tree}
+      assert %{line: 4} = variant(tree, "User").loc
+    end
+
     test "single union field (not list) uses field with union type" do
       schema = schema_with_single_union()
 
@@ -936,23 +1060,30 @@ defmodule TypedGql.TypeGeneratorTest do
       assert result.node.name == "Alice"
     end
 
-    test "a member with no inline fragment still decodes, carrying the shared fields" do
+    test "a member the document does not declare fails to decode" do
       schema = schema_with_union()
       operation = parse!("query { search { __typename id ... on User { email } } }")
 
-      TypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.PartialUnion,
-        function_name: :search,
-        caller_env: __ENV__
-      )
+      modules =
+        TypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.PartialUnion,
+          function_name: :search,
+          caller_env: __ENV__
+        )
+
+      # Post is a member of the union but no fragment declares it, so it gets no
+      # struct: a struct for it could only carry the shared fields, which is a
+      # shape the query never asked for.
+      assert TypedGql.Test.PartialUnion.Search.Result.Search.User in modules
+      refute TypedGql.Test.PartialUnion.Search.Result.Search.Post in modules
 
       json = %{"search" => [%{"__typename" => "Post", "id" => "7"}]}
-      result = TypedGql.ResponseDecoder.decode!(TypedGql.Test.PartialUnion.Search.Result, json)
 
-      assert [%{__struct__: TypedGql.Test.PartialUnion.Search.Result.Search.Post} = post] =
-               result.search
-
-      assert post.id == "7"
+      # The union type has no module to load it into, so the response is refused
+      # rather than decoded into a struct missing what the member could have.
+      assert_raise ArgumentError, ~r/cannot load .*Post/, fn ->
+        TypedGql.ResponseDecoder.decode!(TypedGql.Test.PartialUnion.Search.Result, json)
+      end
     end
 
     test "an abstract type condition applies to every member it covers" do
@@ -1028,11 +1159,11 @@ defmodule TypedGql.TypeGeneratorTest do
       )
 
       user_fields = TypedGql.Test.SpreadCondition.Search.Result.Search.User.__schema__(:fields)
-      post_fields = TypedGql.Test.SpreadCondition.Search.Result.Search.Post.__schema__(:fields)
 
-      # `email` belongs to the User variant only; Post keeps just the shared field.
+      # `email` belongs to the User variant only, and Post — which the spread's
+      # condition does not name — gets no variant at all.
       assert :email in user_fields
-      refute :email in post_fields
+      refute Code.ensure_loaded?(TypedGql.Test.SpreadCondition.Search.Result.Search.Post)
     end
 
     test "a fragment nested inside an abstract one reaches the concrete member" do
@@ -1341,9 +1472,7 @@ defmodule TypedGql.TypeGeneratorTest do
 
       # bio came from the $a copy and avatar from the $b copy; either can be
       # absent while the other is present, so neither may be non-null.
-      [union_node] = tree.children
-      user = Enum.find(union_node.children, &(&1.parent_type == "User"))
-      [profile_node] = user.children
+      [profile_node] = variant(tree, "User").children
 
       child_names = profile_node.fields |> Enum.map(& &1.name) |> Enum.sort()
       assert child_names == [:avatar, :bio]
@@ -1512,12 +1641,13 @@ defmodule TypedGql.TypeGeneratorTest do
         caller_env: __ENV__
       )
 
-      # Named covers User but not Post, so hoisting would hand `name` to Post too.
+      # Named covers User but not Post: the variant exists for the member the
+      # condition declares, and Post is left out entirely rather than generated
+      # with the shared fields alone.
       user_fields = TypedGql.Test.PartialInterface.Search.Result.Search.User.__schema__(:fields)
-      post_fields = TypedGql.Test.PartialInterface.Search.Result.Search.Post.__schema__(:fields)
 
       assert :name in user_fields
-      refute :name in post_fields
+      refute Code.ensure_loaded?(TypedGql.Test.PartialInterface.Search.Result.Search.Post)
     end
 
     test "an interface implemented through another interface is still shared" do
@@ -1553,19 +1683,47 @@ defmodule TypedGql.TypeGeneratorTest do
     end
 
     # Rules.Fragments rejects this before generation runs, but generate/3 is
-    # public and does not validate, so it degrades instead of crashing.
+    # public and does not validate, so it degrades instead of crashing: a
+    # condition the schema does not declare declares no member, and with no
+    # member declared the selection is a plain object rather than a dispatcher
+    # with nothing to dispatch to.
     test "a type condition the schema does not declare contributes to no member" do
       schema = schema_with_union()
       operation = parse!("query { search { __typename ... on Ghost { id } } }")
 
+      modules =
+        TypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.GhostCondition,
+          function_name: :search,
+          caller_env: __ENV__
+        )
+
+      assert TypedGql.Test.GhostCondition.Search.Result.Search in modules
+      refute TypedGql.Test.GhostCondition.Search.Result.Search.Union in modules
+
+      fields = TypedGql.Test.GhostCondition.Search.Result.Search.__schema__(:fields)
+      assert fields == [:__typename]
+
+      json = %{"search" => [%{"__typename" => "User"}]}
+      result = TypedGql.ResponseDecoder.decode!(TypedGql.Test.GhostCondition.Search.Result, json)
+
+      assert [%{__struct__: TypedGql.Test.GhostCondition.Search.Result.Search}] = result.search
+    end
+
+    test "a type condition the schema does not declare contributes nothing to a declared member" do
+      schema = schema_with_union()
+
+      operation =
+        parse!("query { search { __typename ... on User { email } ... on Ghost { id } } }")
+
       TypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.GhostCondition,
+        client_module: TypedGql.Test.GhostAlongside,
         function_name: :search,
         caller_env: __ENV__
       )
 
-      fields = TypedGql.Test.GhostCondition.Search.Result.Search.User.__schema__(:fields)
-      assert fields == [:__typename]
+      fields = TypedGql.Test.GhostAlongside.Search.Result.Search.User.__schema__(:fields)
+      assert fields == [:__typename, :email]
     end
   end
 
@@ -1601,16 +1759,19 @@ defmodule TypedGql.TypeGeneratorTest do
       assert :email in fields
     end
 
-    test "a fragment on a union points at the dispatching union type" do
+    test "a fragment on a union points at a module naming its variants' union" do
       schema = schema_with_union()
       fragment = parse!("fragment SearchFields on SearchResult { ... on User { email } }")
 
-      assert TypedGql.Test.UnionFrag.Fragments.SearchFields.Union ==
+      assert TypedGql.Test.UnionFrag.Fragments.SearchFields ==
                TypeGenerator.generate_fragment(fragment, schema, TypedGql.Test.UnionFrag,
                  caller_env: __ENV__
                )
 
-      assert Code.ensure_loaded?(TypedGql.Test.UnionFrag.Fragments.SearchFields.Union)
+      # Only a type: there is no struct to load into, and no dispatcher.
+      assert Code.ensure_loaded?(TypedGql.Test.UnionFrag.Fragments.SearchFields)
+      refute function_exported?(TypedGql.Test.UnionFrag.Fragments.SearchFields, :__schema__, 1)
+      refute Code.ensure_loaded?(TypedGql.Test.UnionFrag.Fragments.SearchFields.Union)
       assert :email in TypedGql.Test.UnionFrag.Fragments.SearchFields.User.__schema__(:fields)
     end
 
@@ -1645,7 +1806,7 @@ defmodule TypedGql.TypeGeneratorTest do
   # Helpers
 
   defp resolved_tree(schema, query, client_module) do
-    TypeGenerator.generate(parse!(query), schema,
+    TypeGenerator.generate(located!(query), schema,
       client_module: client_module,
       function_name: :search,
       generation_plugins: [CaptureTreePlugin],
@@ -1664,9 +1825,12 @@ defmodule TypedGql.TypeGeneratorTest do
   end
 
   defp variant_field(tree, type_name, field_name) do
+    tree |> variant(type_name) |> Map.fetch!(:fields) |> Enum.find(&(&1.name == field_name))
+  end
+
+  defp variant(tree, type_name) do
     [union_node] = tree.children
-    variant = Enum.find(union_node.children, &(&1.parent_type == type_name))
-    Enum.find(variant.fields, &(&1.name == field_name))
+    Enum.find(union_node.children, &(&1.parent_type == type_name))
   end
 
   # Asserting the exact field type rather than absence from `__schema__(:embeds)`:
@@ -1686,6 +1850,14 @@ defmodule TypedGql.TypeGeneratorTest do
   defp parse!(query) do
     {:ok, %{definitions: [operation | _rest]}} = TypedGql.Parser.parse(query)
     operation
+  end
+
+  # A node's location counts only once SourceAnchor.remap/2 has made it a file
+  # one; a base at line 0 keeps the document's own line numbers.
+  defp located!(query) do
+    query
+    |> parse!()
+    |> SourceAnchor.remap(%{line: 0, column: 0, continuation_column: 0, file: nil})
   end
 
   defp types_with_non_null_name do
@@ -1877,6 +2049,30 @@ defmodule TypedGql.TypeGeneratorTest do
         }
       }
     })
+  end
+
+  # schema_with_union/0 whose SearchResult has exactly `names` as members; a name
+  # the base schema lacks becomes an object type with an `id`.
+  defp schema_with_union_members(names) do
+    update_in(schema_with_union(), [Access.key!(:types)], fn types ->
+      names
+      |> Enum.reject(&Map.has_key?(types, &1))
+      |> Map.new(fn name ->
+        {name,
+         %Type{
+           kind: :object,
+           name: name,
+           fields: %{
+             "id" => %SchemaField{
+               name: "id",
+               type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :scalar, name: "ID"}}
+             }
+           }
+         }}
+      end)
+      |> Map.merge(types)
+      |> put_in(["SearchResult", Access.key!(:possible_types)], names)
+    end)
   end
 
   defp schema_with_union do

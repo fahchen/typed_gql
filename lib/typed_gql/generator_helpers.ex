@@ -95,13 +95,19 @@ defmodule TypedGql.GeneratorHelpers do
         val |> Macro.underscore() |> String.to_atom()
       end)
 
-    base =
-      List.foldr(atoms, nil, fn
-        atom_val, nil -> atom_val
-        atom_val, acc -> {:|, [], [atom_val, acc]}
-      end)
-
+    base = union_type_ast(atoms)
     if opts[:inner_nullable], do: {:|, [], [base, nil]}, else: base
+  end
+
+  @doc """
+  Joins quoted types into one union, in the order given: `[a, b, c]` gives the
+  AST for `a | b | c`.
+  """
+  @spec union_type_ast([Macro.t(), ...]) :: Macro.t()
+  def union_type_ast(types) when types != [] do
+    # Folding from the last type keeps the order given, with no sentinel a `nil`
+    # type (an enum value `NIL`) could be mistaken for.
+    types |> Enum.reverse() |> Enum.reduce(&{:|, [], [&1, &2]})
   end
 
   @doc """

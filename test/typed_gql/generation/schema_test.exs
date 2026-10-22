@@ -58,7 +58,6 @@ defmodule TypedGql.Generation.SchemaTest do
         %Schema{
           kind: :union,
           module: Root.Search,
-          union_module: Root.Search.Union,
           typename_to_module: %{"User" => Root.Search.User},
           children: [variant]
         }

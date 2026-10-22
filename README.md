@@ -144,7 +144,7 @@ defgql :get_user, ~GQL"""
 """
 ```
 
-The fragment generates a typed module at `Client.Fragments.UserFields` — an embedded schema for an object condition, or the `TypedGql.Types.Union` parameterized type when the condition resolves to per-member selections.
+The fragment generates a typed module at `Client.Fragments.UserFields` — an embedded schema for an object condition, or, when the condition resolves to per-member selections, a module whose `t/0` is the union of the per-member schemas at `Client.Fragments.UserFields.TypeName`.
 
 `defgql` only sees fragments defined before it in the module, and a fragment body may only spread fragments defined above it — spreading one defined later is a compile error. If the same name is defined several times before a query, the latest definition wins for that query. See `TypedGql.Macros.deffragment/1` for why the macro model requires this while GraphQL itself does not.
 
@@ -287,6 +287,11 @@ end)
 # __typename is also available as a snake_cased atom
 hd(result.data.search).__typename  #=> :user
 ```
+
+A struct is generated only for the types the document declares, through
+`... on User` or an abstract condition that covers them. A response carrying a
+member the document never declares fails to decode. See the
+[unions and interfaces guide](guides/unions-and-interfaces.md) for the rules.
 
 ## Field Aliases
 

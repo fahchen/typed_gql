@@ -8,6 +8,10 @@ defmodule TypedGql.Generation.Field do
 
   Lowering rebuilds the field definition from `resolved` plus the names, so a
   plugin mutating `resolved` flows through naturally.
+
+  A union or interface field that declares members carries them in
+  `typename_to_module`; it lowers to a `TypedGql.Types.Union` field dispatching
+  to those modules, typed as the union of their structs.
   """
   use TypedStructor
 
@@ -23,6 +27,7 @@ defmodule TypedGql.Generation.Field do
     field :original_name, String.t(), enforce: true
     field :resolved, TypeMapper.resolve_result(), enforce: true
     field :embed_module, module()
+    field :typename_to_module, %{String.t() => module()}
     field :query_field, QueryField.t(), enforce: true
     field :schema_field, SchemaField.t(), enforce: true
   end

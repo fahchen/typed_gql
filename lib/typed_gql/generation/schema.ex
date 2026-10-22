@@ -8,12 +8,10 @@ defmodule TypedGql.Generation.Schema do
     * object node — `kind: :object`, carries `fields` and `children`
       (child nodes for embedded objects). Lowers to one
       `typed_embedded_schema` module.
-    * union node — `kind: :union`, carries `union_module`,
-      `typename_to_module`, and `children` (one object node per concrete
-      type). Lowers to the concrete-type modules; the parameterized
-      `TypedGql.Types.Union` type module is created in a batch of its own
-      first, because Ecto validates parameterized type modules exist at
-      schema compile time.
+    * union node — `kind: :union`, carries `typename_to_module` and
+      `children` (one object node per type the document declares). Lowers to
+      the concrete-type modules only: the field holding it dispatches through
+      `TypedGql.Types.Union`, which takes the members as a field option.
 
   The full tree for an operation is built before any lowering happens, so
   lifecycle plugins see the complete structure.
@@ -43,7 +41,6 @@ defmodule TypedGql.Generation.Schema do
     field :parent_type, String.t()
     field :fields, [Field.t()], default: []
     field :children, [t()], default: []
-    field :union_module, module()
     field :typename_to_module, %{String.t() => module()}, default: %{}
     field :loc, %{line: pos_integer(), column: pos_integer() | nil, file: binary() | nil}
   end

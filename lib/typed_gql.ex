@@ -243,9 +243,10 @@ defmodule TypedGql do
     end
   end
 
-  # A server that violates its own schema (unknown __typename, out-of-range
-  # enum, wrong scalar type) makes Ecto's loader raise; that is the server's
-  # fault, not the caller's, so it surfaces as an error tuple.
+  # A value the generated types cannot hold makes Ecto's loader raise: a server
+  # that violates its own schema (out-of-range enum, wrong scalar type), or a
+  # union/interface member the document never declared with `... on Type`.
+  # Neither is a bug in the caller's code, so it surfaces as an error tuple.
   defp decode_data(data, result_module) when is_map(data) do
     {:ok, ResponseDecoder.decode!(result_module, data)}
   rescue

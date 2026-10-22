@@ -35,17 +35,20 @@ defmodule TypedGql.DocumentLocationTest do
       assert_located(Fixture.Inputs.ProfileInput)
     end
 
-    test "a union dispatcher points at the field whose type is abstract" do
-      assert_located(Fixture.Search.Result.Search.Union)
-    end
-
     test "a variant points at the inline fragment that selects it" do
       assert_located(Fixture.Search.Result.Search.User)
     end
 
-    # No inline fragment names Post, so it has no node of its own to point at.
-    test "a variant no fragment selects stays with the field" do
-      assert_located(Fixture.Search.Result.Search.Post)
+    test "a variant an abstract condition declares points at that condition" do
+      assert_located(Fixture.AbstractOnly.Result.Search.User)
+      assert_located(Fixture.AbstractOnly.Result.Search.Post)
+    end
+
+    # The condition naming a member may sit inside the one covering it, so the
+    # search cannot stop at this level's own fragments.
+    test "a variant named by a nested condition points at that nested one" do
+      assert_located(Fixture.NestedCondition.Result.Search.User)
+      assert_located(Fixture.NestedCondition.Result.Search.Post)
     end
 
     test "a fragment's modules point into its own deffragment" do
@@ -69,7 +72,6 @@ defmodule TypedGql.DocumentLocationTest do
     # the first fragment that *applies* would give User and Post the Node line
     # and make the answer depend on the order the conditions were written in.
     test "a variant points at the fragment naming it, not at an abstract one above" do
-      assert_located(Fixture.AbstractFirst.Result.Search.Union)
       assert_located(Fixture.AbstractFirst.Result.Search.User)
       assert_located(Fixture.AbstractFirst.Result.Search.Post)
     end
@@ -203,8 +205,7 @@ defmodule TypedGql.DocumentLocationTest do
       assert docs_line(Fixture.GetUser.Result.User) <
                docs_line(Fixture.GetUser.Result.User.Profile)
 
-      assert docs_line(Fixture.Search.Result.Search.Union) <
-               docs_line(Fixture.Search.Result.Search.User)
+      assert docs_line(Fixture.Search.Result) < docs_line(Fixture.Search.Result.Search.User)
     end
   end
 

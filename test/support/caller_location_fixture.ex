@@ -83,7 +83,6 @@ defmodule TypedGql.Test.CallerLocationFixture do
       __MODULE__.GetUser.Result => @result_line,
       __MODULE__.GetUser.Result.User => @result_line,
       __MODULE__.GetUser.Variables => @result_line,
-      __MODULE__.Search.Result.Search.Union => @union_line,
       __MODULE__.Search.Result.Search.User => @union_line,
       __MODULE__.Inputs.CreatePostInput => @input_line,
       __MODULE__.Fragments.UserFields => @fragment_line,

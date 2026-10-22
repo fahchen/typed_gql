@@ -35,10 +35,9 @@ defmodule TypedGql.TypeGenerator do
   A generated module records where in the GraphQL document it came from, so
   "go to definition" lands on the selection rather than on the `defgql` line:
   the `Result` module at the operation, a nested module at the field whose
-  sub-selection named it, a union dispatcher at that same field, and a variant
-  at the inline fragment that selects that member. A module generated from a
-  fragment spread lands in the fragment's own `deffragment`, in that file if it
-  is not this one.
+  sub-selection named it, and a variant at the inline fragment that selects
+  that member. A module generated from a fragment spread lands in the
+  fragment's own `deffragment`, in that file if it is not this one.
 
   One exception, from normalization rather than from the mapping: a spread onto
   a union member is expanded into an inline fragment this module synthesizes,
@@ -71,9 +70,16 @@ defmodule TypedGql.TypeGenerator do
   ## Union/Interface support
 
   When a field's type is a union or interface, inline fragments determine
-  which concrete types to generate. Shared fields (outside fragments) are
-  merged into each concrete type's struct. A parameterized `TypedGql.Types.Union`
-  Ecto Type handles `__typename`-based dispatch during deserialization.
+  which concrete types to generate: one variant per type the document declares,
+  or a single embedded schema when it declares none. Shared fields (outside
+  fragments) are merged into each variant's struct. The field holding them is a
+  `TypedGql.Types.Union` field that dispatches on `__typename` to the variant
+  modules, typed as the union of their structs.
+
+  A member the document does not declare gets no struct, so a response carrying
+  one fails to load rather than decoding to a struct that could only hold the
+  shared fields. Declare the member — `... on Type { __typename }` is enough —
+  to make it representable.
   """
 
   alias TypedGql.Generation.Context
@@ -161,13 +167,12 @@ defmodule TypedGql.TypeGenerator do
   caller passing `scalar_types` positionally has to wrap it:
   `generate_fragment(fragment, schema, client_module, scalar_types: types)`.
 
-  Returns the module that stands for the fragment's result. For an object
-  type condition — and for an abstract one whose selections every member
-  shares — that is the embedded schema at `Fragments.FragmentName`. For a
-  condition with per-member selections there is no single struct: the return
-  is the `TypedGql.Types.Union` parameterized type at
-  `Fragments.FragmentName.Union`, which dispatches on `__typename` to the
-  per-member embedded schemas at `Fragments.FragmentName.MemberType`.
+  Returns `Fragments.FragmentName`, the module that stands for the fragment's
+  result. For an object type condition — and for an abstract one whose
+  selections every member shares — it is an embedded schema. For a condition
+  with per-member selections there is no single struct: the per-member embedded
+  schemas sit at `Fragments.FragmentName.MemberType`, and
+  `Fragments.FragmentName` only defines `t/0` as the union of them.
   """
   @spec generate_fragment(TypedGql.Language.Fragment.t(), Schema.t(), module(), [option()]) ::
           module()
@@ -179,24 +184,17 @@ defmodule TypedGql.TypeGenerator do
 
     type_name = fragment.type_condition.name
 
-    tree =
-      run_pipeline(
-        fragment.selection_set.selections,
-        type_name,
-        base_module,
-        build_context(schema, opts),
-        plugins(opts),
-        Keyword.fetch!(opts, :caller_env),
-        SourceAnchor.loc(fragment)
-      )
+    run_pipeline(
+      fragment.selection_set.selections,
+      type_name,
+      base_module,
+      build_context(schema, opts),
+      plugins(opts),
+      Keyword.fetch!(opts, :caller_env),
+      SourceAnchor.loc(fragment)
+    )
 
-    # base_module is the naming root the pipeline was given, not necessarily a
-    # module it created: the union branch emits the variants and the dispatching
-    # union type instead, so return what actually exists.
-    case tree do
-      %GenSchema{kind: :union, union_module: union_module} -> union_module
-      %GenSchema{kind: :object, module: module} -> module
-    end
+    base_module
   end
 
   defp build_context(schema, opts) do
@@ -224,14 +222,6 @@ defmodule TypedGql.TypeGenerator do
       canonical
       |> resolve(parent_type_name, parent_module, context, loc)
       |> run_after(plugins, :after_resolve, context)
-
-    # Union dispatchers are their own batch, and go first: an embedded schema
-    # naming one resolves it through Ecto's `Code.ensure_compiled/1`, which
-    # cannot wait for a module a sibling task in the same batch has not created
-    # yet — the parallel compiler only waits for modules it knows are coming.
-    tree
-    |> union_asts(env)
-    |> GeneratorHelpers.create_modules()
 
     tree
     |> lower(env)
@@ -472,31 +462,24 @@ defmodule TypedGql.TypeGenerator do
       {shared_fields, inline_fragments} =
         Enum.split_with(selections, &match?(%QueryField{}, &1))
 
-      case inline_fragments do
-        [] ->
-          resolve_abstract_fields(shared_fields, parent_type_name, parent_module, context, loc)
-
-        _fragments ->
-          resolve_union(
-            shared_fields,
-            inline_fragments,
-            parent_type_name,
-            parent_module,
-            context,
-            loc
-          )
-      end
+      resolve_union(
+        shared_fields,
+        inline_fragments,
+        parent_type_name,
+        parent_module,
+        context,
+        loc
+      )
     else
       resolve_object(selections, parent_type_name, parent_module, context, loc: loc)
     end
   end
 
-  # Only fields common to every possible type were selected, so no per-variant
-  # struct is needed — but `__typename` can still be any of the possible types.
-  defp resolve_abstract_fields(fields, parent_type_name, parent_module, context, loc) do
-    {:ok, parent} = Schema.get_type(context.schema, parent_type_name)
-
-    resolve_object(fields, parent_type_name, parent_module, context,
+  # No member is declared — only fields common to every possible type were
+  # selected, or every fragment named a type the schema does not have — so no
+  # per-variant struct is needed. `__typename` can still be any possible type.
+  defp resolve_abstract_fields(fields, parent, parent_module, context, loc) do
+    resolve_object(fields, parent.name, parent_module, context,
       typename_values: parent.possible_types,
       loc: loc
     )
@@ -512,10 +495,8 @@ defmodule TypedGql.TypeGenerator do
     # field against a concrete member (`friend: Node` narrowing to `friend: User`
     # on User). Flattening against the type actually being resolved is what makes
     # the list the fields-only one the reducer below needs.
-    fields =
-      fields
-      |> member_selections(parent_type_name, context)
-      |> merge_fields()
+    {fields, _fragments} = member_selections(fields, parent_type_name, context)
+    fields = merge_fields(fields)
 
     {gen_fields, children} =
       Enum.reduce(fields, {[], []}, fn %QueryField{} = field, {fields_acc, children_acc} ->
@@ -732,8 +713,7 @@ defmodule TypedGql.TypeGenerator do
     nested_module = Module.concat(parent_module, GeneratorHelpers.camelize(base.original_name))
 
     # The selection whose sub-selections these are is what named the module, so
-    # it is where the module belongs — and, for a union, where its dispatcher
-    # belongs too.
+    # it is where the module belongs.
     child =
       resolve(
         base.query_field.selection_set.selections,
@@ -747,13 +727,13 @@ defmodule TypedGql.TypeGenerator do
       case child do
         # Union/interface: lower to a plain field carrying the parameterized
         # TypedGql.Types.Union type instead of an embeds_one/embeds_many embed.
-        %GenSchema{kind: :union, union_module: union_module} ->
+        %GenSchema{kind: :union, typename_to_module: typename_to_module} ->
           %{
             base
-            | embed_module: union_module,
+            | typename_to_module: typename_to_module,
               resolved: %{
                 base.resolved
-                | ecto_type: wrap_list(depth, union_module),
+                | ecto_type: wrap_list(depth, Types.Union),
                   enum_values: nil
               }
           }
@@ -793,11 +773,10 @@ defmodule TypedGql.TypeGenerator do
 
   defp faithful_many?(_field), do: false
 
-  # A variant per possible type of the abstract parent, not per inline fragment:
-  # the server may return any member, including one no fragment selected, and it
-  # answers with a concrete typename even when the fragment condition was itself
-  # abstract (`... on Node`). Members without a matching fragment still decode,
-  # carrying the shared fields alone.
+  # A variant per type the document declares, not per possible type of the
+  # abstract parent: a member no fragment reaches has no fields of its own, and a
+  # response carrying one fails to decode rather than arriving with the shared
+  # fields alone. With nothing declared the selection degrades to a plain object.
   defp resolve_union(
          shared_fields,
          inline_fragments,
@@ -807,62 +786,63 @@ defmodule TypedGql.TypeGenerator do
          loc
        ) do
     {:ok, parent} = Schema.get_type(context.schema, parent_type_name)
-    typename_values = parent.possible_types
 
-    {typename_to_module, variants} =
-      Enum.reduce(typename_values, {%{}, []}, fn type_name, {type_map, variants_acc} ->
-        merged_selections =
-          shared_fields ++ member_selections(inline_fragments, type_name, context)
+    # Schema order; the field's typespec sorts its variants anyway.
+    declared =
+      for type_name <- parent.possible_types,
+          {selections, [_fragment | _rest] = fragments} <-
+            [member_selections(inline_fragments, type_name, context)],
+          do: {type_name, shared_fields ++ selections, fragments}
 
+    case declared do
+      [] -> resolve_abstract_fields(shared_fields, parent, parent_module, context, loc)
+      declared -> resolve_declared_union(declared, parent, parent_module, context, loc)
+    end
+  end
+
+  defp resolve_declared_union(declared, parent, parent_module, context, loc) do
+    {variants, typename_to_module} =
+      Enum.map_reduce(declared, %{}, fn {type_name, selections, fragments}, typename_to_module ->
         # Member type names from schema, bounded set
         # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
         variant_module = Module.concat(parent_module, GeneratorHelpers.camelize(type_name))
 
         variant =
-          resolve_object(merged_selections, type_name, variant_module, context,
-            typename_values: typename_values,
-            loc: variant_loc(inline_fragments, type_name) || loc
+          resolve_object(selections, type_name, variant_module, context,
+            typename_values: parent.possible_types,
+            loc: variant_loc(fragments, type_name) || loc
           )
 
-        {Map.put(type_map, type_name, variant_module), [variant | variants_acc]}
+        {variant, Map.put(typename_to_module, type_name, variant_module)}
       end)
 
-    # Union type module names derived from schema at compile time
-    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-    union_module = Module.concat(parent_module, "Union")
-    reject_variant_collisions!(typename_to_module, union_module, parent_type_name)
+    reject_variant_collisions!(typename_to_module, parent.name)
 
     %GenSchema{
       kind: :union,
       module: parent_module,
-      union_module: union_module,
       typename_to_module: typename_to_module,
-      children: :lists.reverse(variants),
+      children: variants,
       loc: loc
     }
   end
 
-  # A variant module belongs at the inline fragment that names that member.
-  # Matching on `applies_to?` instead would let `... on Node` — which applies to
-  # every member implementing it — claim all of them, so the answer would depend
-  # on which condition was written first. A member no fragment names, reached
-  # only through an abstract condition or not selected at all, has no node of
-  # its own and stays with the field whose type is abstract.
-  defp variant_loc(inline_fragments, type_name) do
-    case Enum.find(inline_fragments, &(&1.type_condition.name == type_name)) do
-      nil -> nil
-      %InlineFragment{} = fragment -> SourceAnchor.loc(fragment)
-    end
+  # A variant belongs at the fragment that names its member — `... on User`, not
+  # an abstract condition above it — or else at the first one that covers it. A
+  # spread's wrapper has no location, so a member only a spread declares stays
+  # with the field.
+  defp variant_loc(fragments, type_name) do
+    Enum.find_value(fragments, &(&1.type_condition.name == type_name && SourceAnchor.loc(&1))) ||
+      Enum.find_value(fragments, &SourceAnchor.loc/1)
   end
 
-  # Every variant gets a module named after its camelized typename, and the
-  # dispatcher takes "Union" — a member named Union, or two members whose names
-  # camelize identically ("Foo_bar"/"FooBar"), would define two different
-  # modules under one name and silently clobber whichever loads first.
-  defp reject_variant_collisions!(typename_to_module, union_module, parent_type_name) do
+  # Every variant gets a module named after its camelized typename, so two
+  # members whose names camelize identically ("Foo_bar"/"FooBar") would define
+  # two different modules under one name and silently clobber whichever loads
+  # first.
+  defp reject_variant_collisions!(typename_to_module, parent_type_name) do
     collided =
       typename_to_module
-      |> Map.put("(union dispatcher)", union_module)
       |> Enum.group_by(fn {_name, module} -> module end, fn {name, _module} -> name end)
       |> Enum.filter(fn {_module, names} -> length(names) > 1 end)
 
@@ -877,26 +857,33 @@ defmodule TypedGql.TypeGenerator do
     end
   end
 
-  # Flattens the fragments that apply to `type_name` down to plain fields.
-  # A fragment applies when its condition names the member, or is an abstract
-  # type the member belongs to (`... on Node` over a union of Nodes). Recursing
-  # is what handles a fragment nested inside an abstract one, whose members were
-  # normalized against the abstract type and so are still inline fragments —
-  # resolve_object/5 only accepts fields.
+  # Flattens the fragments that reach `type_name` down to plain fields, and
+  # returns those fragments too, depth first. A fragment reaches the member when
+  # its condition names it or is an abstract type it belongs to. Only fragments
+  # that reach it are descended into, so in `... on Named { ... on Node { id } }`
+  # the inner Node never reaches a member Named rules out. Recursing handles a
+  # fragment nested in an abstract one, whose members are still inline fragments
+  # — resolve_object/5 only accepts fields.
   defp member_selections(selections, type_name, context) do
-    Enum.flat_map(selections, fn
-      %QueryField{} = field ->
-        [field]
+    {fields, fragments} =
+      Enum.flat_map_reduce(selections, [], fn
+        %QueryField{} = field, fragments ->
+          {[field], fragments}
 
-      %InlineFragment{} = fragment ->
-        if applies_to?(context.schema, fragment.type_condition.name, type_name) do
-          fragment.selection_set.selections
-          |> prepend_directives(fragment.directives)
-          |> member_selections(type_name, context)
-        else
-          []
-        end
-    end)
+        %InlineFragment{} = fragment, fragments ->
+          if applies_to?(context.schema, fragment.type_condition.name, type_name) do
+            {fields, nested} =
+              fragment.selection_set.selections
+              |> prepend_directives(fragment.directives)
+              |> member_selections(type_name, context)
+
+            {fields, Enum.reverse(nested, [fragment | fragments])}
+          else
+            {[], fragments}
+          end
+      end)
+
+    {fields, Enum.reverse(fragments)}
   end
 
   defp applies_to?(_schema, type_name, type_name), do: true
@@ -941,29 +928,20 @@ defmodule TypedGql.TypeGenerator do
 
   defp override_typename_type(resolved, _field_name, _opts), do: resolved
 
-  # ── create (union types) ─────────────────────────────────────────────────
-
-  # Collects the union/interface dispatcher modules anywhere in the tree.
-  # They depend on nothing that is generated — the variant modules reach them
-  # as escaped atoms — so one batch holds all of them.
-  defp union_asts(node, env, acc \\ [])
-
-  defp union_asts(%GenSchema{kind: :union} = node, env, acc) do
-    create_opts = SourceAnchor.create_opts(env, node.loc)
-    ast = {node.union_module, Types.Union.module_ast(node.typename_to_module), create_opts}
-    Enum.reduce(node.children, [ast | acc], &union_asts(&1, env, &2))
-  end
-
-  defp union_asts(%GenSchema{kind: :object} = node, env, acc) do
-    Enum.reduce(node.children, acc, &union_asts(&1, env, &2))
-  end
-
   # ── lower ──────────────────────────────────────────────────────────────
 
   # Lowers the tree into {module, quoted_ast, create_opts} triples, rebuilding
   # each field's tuple/AST from its Generation.Field, so plugin nullability
   # changes flow through naturally. The triples differ in their create opts: a
   # module records the location of the node it came from, not one shared line.
+  # A union at the root — a fragment on an abstract type — has no field to type,
+  # so its naming root becomes a module defining only `t/0` as its variants'
+  # union. A nested union needs none: its field carries that type itself.
+  defp lower(%GenSchema{kind: :union} = tree, env) do
+    type_ast = quote(do: @type(t() :: unquote(variants_type_ast(tree.typename_to_module))))
+    lower(tree, [{tree.module, type_ast, SourceAnchor.create_opts(env, tree.loc)}], env)
+  end
+
   defp lower(%GenSchema{} = tree, env), do: lower(tree, [], env)
 
   defp lower(%GenSchema{kind: :union} = node, acc, env) do
@@ -1011,21 +989,35 @@ defmodule TypedGql.TypeGenerator do
 
   defp list_default_opts(_field), do: []
 
-  # A composite leaf — a union dispatcher, or an object behind `Ecto.Embedded` —
-  # takes its typespec from the GraphQL type, because the Ecto type says nothing
-  # about which list levels and elements are nullable. `Ecto.Embedded` is itself
-  # a parameterized type, so it also takes its target through field options
-  # rather than through `embeds_one`/`embeds_many`.
+  # A composite leaf — a union, or an object behind `Ecto.Embedded` — takes its
+  # typespec from the GraphQL type, because the Ecto type says nothing about
+  # which list levels and elements are nullable. Both are parameterized types, so
+  # they also take their targets through field options rather than through
+  # `embeds_one`/`embeds_many`.
+  defp composite_opts(%GenField{typename_to_module: %{} = typename_to_module} = field) do
+    leaf_ast = variants_type_ast(typename_to_module)
+    type_opt = [type: TypeMapper.list_type_ast(field.schema_field.type, leaf_ast)]
+    {type_opt, [typename_to_module: Macro.escape(typename_to_module)]}
+  end
+
   defp composite_opts(%GenField{embed_module: nil}), do: {[], []}
 
+  # A plain field with an embed module is an object behind `Ecto.Embedded`:
+  # embeds_one/embeds_many lower through their own clause of lower_field/1.
   defp composite_opts(%GenField{embed_module: module} = field) do
     leaf_ast = quote(do: unquote(module).t())
     type_opt = [type: TypeMapper.list_type_ast(field.schema_field.type, leaf_ast)]
+    {type_opt, [cardinality: :one, related: module]}
+  end
 
-    case GeneratorHelpers.unwrap_list(field.resolved.ecto_type) do
-      {Ecto.Embedded, _depth} -> {type_opt, [cardinality: :one, related: module]}
-      _other -> {type_opt, []}
-    end
+  # In sorted order, so the same document renders the same typespec on every
+  # compile. reject_variant_collisions!/2 keeps the modules distinct.
+  defp variants_type_ast(typename_to_module) do
+    typename_to_module
+    |> Map.values()
+    |> Enum.sort()
+    |> Enum.map(&quote(do: unquote(&1).t()))
+    |> GeneratorHelpers.union_type_ast()
   end
 
   defp build_embedded_schema_ast(module_name, field_defs, create_opts) do
