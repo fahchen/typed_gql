@@ -98,6 +98,21 @@
               "deprecationReason": null
             },
             {
+              "name": "updateProfile",
+              "description": null,
+              "args": [
+                {
+                  "name": "input",
+                  "description": null,
+                  "type": {"kind": "NON_NULL", "name": null, "ofType": {"kind": "INPUT_OBJECT", "name": "ProfileInput", "ofType": null}},
+                  "defaultValue": null
+                }
+              ],
+              "type": {"kind": "OBJECT", "name": "User", "ofType": null},
+              "isDeprecated": false,
+              "deprecationReason": null
+            },
+            {
               "name": "createPost",
               "description": null,
               "args": [

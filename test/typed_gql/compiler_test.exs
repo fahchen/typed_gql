@@ -173,10 +173,30 @@ defmodule TypedGql.CompilerTest do
       assert result_module == TypedGql.Test.CompilerFragment.Fragments.UserFields
     end
 
-    test "the entry carries no key beyond source, fragment and result_module" do
+    test "the entry carries no key beyond source, fragment, result_module and anchored" do
       entry = compile_fragment!(TypedGql.Test.CompilerFragKeys, "fragment F on User { name }")
 
-      assert Enum.sort(Map.keys(entry)) == [:fragment, :result_module, :source]
+      assert Enum.sort(Map.keys(entry)) == [:anchored, :fragment, :result_module, :source]
+    end
+
+    # The entry is what a later `defgql` spreading this fragment generates from,
+    # so it carries the fragment already anchored at the base it was given.
+    test "the entry records the fragment anchored at its base" do
+      base = %{line: 12, column: 2, continuation_column: 2, file: nil}
+
+      entry =
+        compile_fragment!(TypedGql.Test.CompilerFragBase, "fragment F on User { name }",
+          document_base: base
+        )
+
+      assert entry.anchored == TypedGql.SourceAnchor.remap(entry.fragment, base)
+      assert entry.anchored.loc.line == 13
+    end
+
+    test "the entry anchors nothing for a document that was given no base" do
+      entry = compile_fragment!(TypedGql.Test.CompilerFragNoBase, "fragment F on User { name }")
+
+      assert entry.anchored.loc.line == nil
     end
 
     test "the recorded source is trimmed" do
@@ -227,10 +247,11 @@ defmodule TypedGql.CompilerTest do
     )
   end
 
-  defp compile_fragment!(client_module, fragment_string) do
-    Compiler.compile_fragment!(fragment_string, SchemaHelper.build_schema(),
-      client_module: client_module,
-      caller_env: __ENV__
+  defp compile_fragment!(client_module, fragment_string, opts \\ []) do
+    Compiler.compile_fragment!(
+      fragment_string,
+      SchemaHelper.build_schema(),
+      [client_module: client_module, caller_env: __ENV__] ++ opts
     )
   end
 end

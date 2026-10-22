@@ -100,6 +100,7 @@ defmodule TypedGql do
       @typed_gql_scalars unquote(scalars_ast)
       @typed_gql_generation_plugins unquote(generation_plugins_ast)
       @typed_gql_use_config unquote(use_config)
+      @typed_gql_input_modules []
       @typed_gql_schema TypedGql.__load_schema__(unquote(source), __ENV__.file)
 
       @doc false

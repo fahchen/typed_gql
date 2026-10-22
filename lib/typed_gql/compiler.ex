@@ -13,6 +13,7 @@ defmodule TypedGql.Compiler do
   alias TypedGql.Printer
   alias TypedGql.Query
   alias TypedGql.Schema
+  alias TypedGql.SourceAnchor
   alias TypedGql.TypeGenerator
   alias TypedGql.Validator
 
@@ -21,13 +22,16 @@ defmodule TypedGql.Compiler do
           | {:function_name, atom()}
           | {:scalar_types, map()}
           | {:caller_env, Macro.Env.t()}
+          | {:document_base, SourceAnchor.base()}
           | {:fragments, %{String.t() => fragment_entry()}}
           | {:generation_plugins, [module()]}
+          | {:created_inputs, [module()]}
 
   @type fragment_entry() :: %{
           source: String.t(),
           fragment: Fragment.t(),
-          result_module: module()
+          result_module: module(),
+          anchored: Fragment.t()
         }
 
   # Dialyzer cannot trace callers of compile!/3 because it is only invoked
@@ -77,22 +81,32 @@ defmodule TypedGql.Compiler do
     )
 
     client_module = Keyword.fetch!(opts, :client_module)
+    base = Keyword.get(opts, :document_base)
 
     generator_opts = [
       client_module: client_module,
       function_name: Keyword.fetch!(opts, :function_name),
       scalar_types: Keyword.get(opts, :scalar_types, %{}),
-      # A fragment defined in the document shadows a registered one of the same
-      # name: it is the definition the server will see.
-      fragments:
-        opts |> registered_fragments() |> Map.merge(Document.fragments_by_name(document)),
+      fragments: generation_fragments(opts, document, base),
       generation_plugins: Keyword.get(opts, :generation_plugins, []),
-      caller_env: caller_env
+      caller_env: caller_env,
+      created_inputs: Keyword.get(opts, :created_inputs, [])
     ]
 
-    output_modules = TypeGenerator.generate(operation, schema, generator_opts)
-    input_modules = InputTypeGenerator.generate(operation, schema, generator_opts)
-    variables_module = InputTypeGenerator.generate_variables(operation, schema, generator_opts)
+    # Generation reads node locations to place the modules it creates, so it
+    # gets the copy whose lines are this file's. Validation ran on the document
+    # as parsed, whose lines its messages report relative to the caller.
+    anchored = SourceAnchor.remap(operation, base)
+
+    output_modules = TypeGenerator.generate(anchored, schema, generator_opts)
+    input_modules = InputTypeGenerator.generate(anchored, schema, generator_opts)
+
+    variables_module =
+      InputTypeGenerator.generate_variables(
+        anchored,
+        schema,
+        Keyword.update!(generator_opts, :created_inputs, &(&1 ++ input_modules))
+      )
 
     %Query{
       # Only the transmitted document gains __typename. Dispatch reads it off the
@@ -122,12 +136,40 @@ defmodule TypedGql.Compiler do
     |> Map.new(fn {name, entry} -> {name, entry.fragment} end)
   end
 
+  # A fragment's lines belong to the document it was written in, not to the one
+  # it ends up in: `TypedGql.Macros.__resolve_fragments__` appends a registered
+  # fragment's source to the query, so the copy parsed out of the combined
+  # document counts its lines from the top of the query. The registered entry is
+  # the same definition with its own `deffragment` anchor, so that is the copy
+  # generation gets, and the query's own definitions are anchored to the query.
+  #
+  # The two can never disagree about a name: `__resolve_fragments__` appends
+  # nothing for a name the query defines itself, so such a name has no
+  # registered entry, and a name that does have one is not defined by the query.
+  # The appended copies are dropped before anchoring, which they would only
+  # waste.
+  defp generation_fragments(opts, document, base) do
+    registered = anchored_fragments(opts)
+
+    document
+    |> Document.fragments_by_name()
+    |> Map.drop(Map.keys(registered))
+    |> Map.new(fn {name, fragment} -> {name, SourceAnchor.remap(fragment, base)} end)
+    |> Map.merge(registered)
+  end
+
+  defp anchored_fragments(opts) do
+    opts
+    |> Keyword.get(:fragments, %{})
+    |> Map.new(fn {name, entry} -> {name, entry.anchored} end)
+  end
+
   @doc """
   Compiles a GraphQL fragment string into a fragment entry map.
 
   Parses the fragment, validates it, and generates its result modules under
   `ClientModule.Fragments.FragmentName`. Returns a map with `:source`,
-  `:fragment`, and `:result_module` keys — see
+  `:fragment`, `:result_module` and `:anchored` keys — see
   `TypedGql.TypeGenerator.generate_fragment/4` for which module
   `:result_module` names.
 
@@ -161,17 +203,24 @@ defmodule TypedGql.Compiler do
       generation_plugins: Keyword.get(opts, :generation_plugins, []),
       # The fragment's own definition is deliberately left out: a body may only
       # spread fragments registered before it, so it can never spread itself.
-      fragments: registered_fragments(opts),
+      # Nothing is appended here either, so a spread's nodes stay in their own
+      # `deffragment`'s coordinates and are anchored by name, one entry at a time.
+      fragments: anchored_fragments(opts),
       caller_env: caller_env
     ]
 
+    anchored = SourceAnchor.remap(fragment, Keyword.get(opts, :document_base))
+
     result_module =
-      TypeGenerator.generate_fragment(fragment, schema, client_module, generator_opts)
+      TypeGenerator.generate_fragment(anchored, schema, client_module, generator_opts)
 
     %{
       source: String.trim(fragment_string),
       fragment: fragment,
-      result_module: result_module
+      result_module: result_module,
+      # What a later `defgql` generates from when it spreads this fragment: its
+      # body's lines are this file's already, so no spread remaps it again.
+      anchored: anchored
     }
   end
 

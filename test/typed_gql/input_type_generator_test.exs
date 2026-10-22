@@ -196,6 +196,30 @@ defmodule TypedGql.InputTypeGeneratorTest do
     end
   end
 
+  describe "a nested input type a variable also names" do
+    # $input reaches AddressInput as a field first, but $address names it, so
+    # it is generated once, for $address — TypedGql.DocumentLocationTest checks
+    # the location itself, which an in-memory module does not record.
+    test "is generated once, not again under the type that reaches it" do
+      operation =
+        parse!(
+          "mutation CreateUser($input: CreateUserInput!, $address: AddressInput) " <>
+            "{ createUser(input: $input) { name } }"
+        )
+
+      modules =
+        InputTypeGenerator.generate(operation, schema_with_nested_input(),
+          client_module: TypedGql.Test.Input.NamedNested,
+          caller_env: __ENV__
+        )
+
+      assert Enum.sort(modules) == [
+               TypedGql.Test.Input.NamedNested.Inputs.AddressInput,
+               TypedGql.Test.Input.NamedNested.Inputs.CreateUserInput
+             ]
+    end
+  end
+
   describe "deeply nested input types" do
     test "generates 3-level deep input with list and enum" do
       schema = schema_with_deep_input()
@@ -362,18 +386,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation UpdateProfile($homeAddress: AddressInput!) { updateProfile(input: $homeAddress) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.EmbedSource,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.EmbedSource,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.EmbedSource,
           function_name: :update_profile,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       {:ok, vars} = variables_module.build(%{home_address: %{city: "NYC"}})
@@ -595,18 +621,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation CreateUser($input: CreateUserInput!) { createUser(input: $input) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.Embed,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.Embed,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.Embed,
           function_name: :create_user,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       assert variables_module == TypedGql.Test.Var.Embed.CreateUser.Variables
@@ -626,18 +654,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation CreateUser($id: ID!, $input: CreateUserInput!) { createUser(input: $input) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.Mixed,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.Mixed,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.Mixed,
           function_name: :create_user,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       fields = variables_module.__schema__(:fields)
@@ -660,18 +690,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation CreateUser($input: CreateUserInput!) { createUser(input: $input) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.Dump,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.Dump,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.Dump,
           function_name: :create_user,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       {:ok, vars} = variables_module.build(%{input: %{name: "Alice", email: "a@b.com"}})
@@ -728,18 +760,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation CreateUser($input: CreateUserInput!) { createUser(input: $input) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.ParamsEmbed,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.ParamsEmbed,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.ParamsEmbed,
           function_name: :create_user,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       assert {:ok, vars} = variables_module.build(%{input: %{name: "Alice"}})
