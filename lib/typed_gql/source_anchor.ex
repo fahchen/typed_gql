@@ -182,14 +182,21 @@ defmodule TypedGql.SourceAnchor do
   @doc """
   The file location a node was remapped to, or nil when it has none.
 
+  Only a position `remap/2` rewrote is a file position. It stamps `:file` — nil
+  for the caller's own file — which a position straight from the parser does
+  not carry: that one counts from the top of the document, and reading it as a
+  file line would send the module to whatever code sits on that line. A
+  generator handed a document nobody remapped therefore keeps the caller's own
+  location, as it did before positions existed.
+
   A line with no column is still a location: `remap/2` keeps the line of a node
   that carried no column to rewrite, and `Module.create/3` reads only the line
   anyway. Requiring both would send such a module back to the `defgql` for want
   of a coordinate nothing asked for.
   """
   @spec loc(struct()) :: loc() | nil
-  def loc(%{loc: %{line: line} = loc}) when is_integer(line),
-    do: %{line: line, column: Map.get(loc, :column), file: Map.get(loc, :file)}
+  def loc(%{loc: %{line: line, file: file} = loc}) when is_integer(line),
+    do: %{line: line, column: Map.get(loc, :column), file: file}
 
   def loc(_node), do: nil
 

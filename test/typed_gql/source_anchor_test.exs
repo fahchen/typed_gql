@@ -174,7 +174,7 @@ defmodule TypedGql.SourceAnchorTest do
   describe "loc/1 and create_opts/2" do
     test "a node's location moves the caller's line and nothing else" do
       env = __ENV__
-      node = %Field{name: "id", loc: %{line: 7, column: 3}}
+      node = %Field{name: "id", loc: %{line: 7, column: 3, file: nil}}
       opts = SourceAnchor.create_opts(env, SourceAnchor.loc(node))
 
       assert SourceAnchor.loc(node) == %{line: 7, column: 3, file: nil}
@@ -192,6 +192,16 @@ defmodule TypedGql.SourceAnchorTest do
 
       assert SourceAnchor.loc(node) == %{line: 13, column: nil, file: nil}
       assert SourceAnchor.create_opts(env, SourceAnchor.loc(node)).line == 13
+    end
+
+    # A parser position counts from the top of the document; only remap/2 makes
+    # it a file one, so a document nobody remapped must not move the module.
+    test "a position nobody remapped keeps the caller's own" do
+      env = __ENV__
+      node = %Field{name: "id", loc: %{line: 7, column: 3}}
+
+      assert SourceAnchor.loc(node) == nil
+      assert SourceAnchor.create_opts(env, SourceAnchor.loc(node)) == env
     end
 
     test "a node with no location keeps the caller's own" do
