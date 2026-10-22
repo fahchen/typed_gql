@@ -386,18 +386,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation UpdateProfile($homeAddress: AddressInput!) { updateProfile(input: $homeAddress) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.EmbedSource,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.EmbedSource,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.EmbedSource,
           function_name: :update_profile,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       {:ok, vars} = variables_module.build(%{home_address: %{city: "NYC"}})
@@ -619,18 +621,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation CreateUser($input: CreateUserInput!) { createUser(input: $input) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.Embed,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.Embed,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.Embed,
           function_name: :create_user,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       assert variables_module == TypedGql.Test.Var.Embed.CreateUser.Variables
@@ -650,18 +654,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation CreateUser($id: ID!, $input: CreateUserInput!) { createUser(input: $input) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.Mixed,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.Mixed,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.Mixed,
           function_name: :create_user,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       fields = variables_module.__schema__(:fields)
@@ -684,18 +690,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation CreateUser($input: CreateUserInput!) { createUser(input: $input) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.Dump,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.Dump,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.Dump,
           function_name: :create_user,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       {:ok, vars} = variables_module.build(%{input: %{name: "Alice", email: "a@b.com"}})
@@ -752,18 +760,20 @@ defmodule TypedGql.InputTypeGeneratorTest do
           "mutation CreateUser($input: CreateUserInput!) { createUser(input: $input) { name } }"
         )
 
-      InputTypeGenerator.generate(operation, schema,
-        client_module: TypedGql.Test.Var.ParamsEmbed,
-        scalar_types: %{},
-        caller_env: __ENV__
-      )
+      input_modules =
+        InputTypeGenerator.generate(operation, schema,
+          client_module: TypedGql.Test.Var.ParamsEmbed,
+          scalar_types: %{},
+          caller_env: __ENV__
+        )
 
       variables_module =
         InputTypeGenerator.generate_variables(operation, schema,
           client_module: TypedGql.Test.Var.ParamsEmbed,
           function_name: :create_user,
           scalar_types: %{},
-          caller_env: __ENV__
+          caller_env: __ENV__,
+          created_inputs: input_modules
         )
 
       assert {:ok, vars} = variables_module.build(%{input: %{name: "Alice"}})

@@ -180,21 +180,6 @@ defmodule TypedGql.GeneratorHelpers do
     quote(do: unquote(module).t())
   end
 
-  @created_key {__MODULE__, :created_modules}
-
-  @doc """
-  Whether this compilation has already created `module`.
-
-  `Code.ensure_loaded?/1` answers a different question — whether the module is
-  loadable *yet* — and the parallel compiler decides that on its own schedule,
-  which changed in Elixir 1.19. A caller that skips work for a module it
-  already generated needs an answer that does not move with the compiler.
-  """
-  @spec created?(module()) :: boolean()
-  def created?(module) when is_atom(module) do
-    MapSet.member?(Process.get(@created_key, MapSet.new()), module)
-  end
-
   @doc """
   Creates multiple modules from `{module_name, quoted_ast, create_opts}` tuples.
 
@@ -245,17 +230,6 @@ defmodule TypedGql.GeneratorHelpers do
       _error in [ArgumentError, MatchError, UndefinedFunctionError] ->
         Enum.each(module_asts, create_fn)
     end
-
-    # Recorded once every module exists: a creation that raised leaves nothing
-    # claiming it was done.
-    record_created(Enum.map(module_asts, fn {module, _ast, _create_opts} -> module end))
-  end
-
-  defp record_created(modules) do
-    Process.put(
-      @created_key,
-      MapSet.union(Process.get(@created_key, MapSet.new()), MapSet.new(modules))
-    )
 
     :ok
   end

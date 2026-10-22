@@ -25,6 +25,7 @@ defmodule TypedGql.Compiler do
           | {:document_base, SourceAnchor.base()}
           | {:fragments, %{String.t() => fragment_entry()}}
           | {:generation_plugins, [module()]}
+          | {:created_inputs, [module()]}
 
   @type fragment_entry() :: %{
           source: String.t(),
@@ -88,7 +89,8 @@ defmodule TypedGql.Compiler do
       scalar_types: Keyword.get(opts, :scalar_types, %{}),
       fragments: generation_fragments(opts, document, base),
       generation_plugins: Keyword.get(opts, :generation_plugins, []),
-      caller_env: caller_env
+      caller_env: caller_env,
+      created_inputs: Keyword.get(opts, :created_inputs, [])
     ]
 
     # Generation reads node locations to place the modules it creates, so it
@@ -98,7 +100,13 @@ defmodule TypedGql.Compiler do
 
     output_modules = TypeGenerator.generate(anchored, schema, generator_opts)
     input_modules = InputTypeGenerator.generate(anchored, schema, generator_opts)
-    variables_module = InputTypeGenerator.generate_variables(anchored, schema, generator_opts)
+
+    variables_module =
+      InputTypeGenerator.generate_variables(
+        anchored,
+        schema,
+        Keyword.update!(generator_opts, :created_inputs, &(&1 ++ input_modules))
+      )
 
     %Query{
       # Only the transmitted document gains __typename. Dispatch reads it off the

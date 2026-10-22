@@ -18,10 +18,11 @@ defmodule TypedGql.InputTypeGenerator do
   a variable of its own names it.
 
   A type two `defgql`s share is generated once, by the first of them, and keeps
-  that one's location: the second skips a module this compilation has already
-  created. Asking whether the module is *loadable* instead would hand the answer
-  to the parallel compiler's schedule, which changed in Elixir 1.19 — the same
-  document would then be located differently on either side of that.
+  that one's location: the second is told, through `:created_inputs`, which
+  modules an earlier `defgql` of its client already created, and skips them.
+  Asking whether the module is *loadable* instead would hand the answer to the
+  parallel compiler's schedule, which changed in Elixir 1.19 — the same document
+  would then be located differently on either side of that.
   """
 
   alias TypedGql.GeneratorHelpers
@@ -40,6 +41,7 @@ defmodule TypedGql.InputTypeGenerator do
           | {:function_name, atom()}
           | {:scalar_types, map()}
           | {:caller_env, Macro.Env.t()}
+          | {:created_inputs, [module()]}
 
   @doc """
   Generates input type modules for all input types referenced by
@@ -53,12 +55,15 @@ defmodule TypedGql.InputTypeGenerator do
     - `:scalar_types` — custom scalar type mappings (default: `%{}`)
     - `:caller_env` — the macro caller's `Macro.Env`, used to set generated
       modules' source location for editor "go to definition" support
+    - `:created_inputs` — input modules already created, which are skipped
+      (default: `[]`)
   """
   @spec generate(TypedGql.Language.OperationDefinition.t(), Schema.t(), [option()]) :: [module()]
   def generate(operation, schema, opts) do
     client_module = Keyword.fetch!(opts, :client_module)
     scalar_types = Keyword.get(opts, :scalar_types, %{})
     caller_env = Keyword.fetch!(opts, :caller_env)
+    created = Keyword.get(opts, :created_inputs, [])
 
     # Input module names derived from schema at compile time
     # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
@@ -77,11 +82,15 @@ defmodule TypedGql.InputTypeGenerator do
 
     # A type a variable names belongs at that variable even when an earlier
     # variable's type reaches it first as a field, so the nested walk treats
-    # every named type as already seen and leaves it to its own variable.
-    seen = MapSet.new(named, fn {module, _type_name, _loc} -> module end)
+    # every named type as already seen and leaves it to its own variable. A type
+    # an earlier `defgql` created is skipped outright, keeping that one's location.
+    named_modules = Enum.map(named, fn {module, _type_name, _loc} -> module end)
+    seen = MapSet.new(created ++ named_modules)
 
     {modules, module_asts, _seen} =
-      Enum.reduce(named, {[], [], seen}, fn {module, type_name, loc}, collect_acc ->
+      named
+      |> Enum.reject(fn {module, _type_name, _loc} -> module in created end)
+      |> Enum.reduce({[], [], seen}, fn {module, type_name, loc}, collect_acc ->
         context =
           {schema, scalar_types, inputs_module, SourceAnchor.create_opts(caller_env, loc)}
 
@@ -107,6 +116,8 @@ defmodule TypedGql.InputTypeGenerator do
     - `:scalar_types` — custom scalar type mappings (default: `%{}`)
     - `:caller_env` — the macro caller's `Macro.Env`, used to set generated
       modules' source location for editor "go to definition" support
+    - `:created_inputs` — input modules already created, which are skipped
+      (default: `[]`)
   """
   @spec generate_variables(
           TypedGql.Language.OperationDefinition.t(),
@@ -131,10 +142,12 @@ defmodule TypedGql.InputTypeGenerator do
     variables_module =
       Module.concat([client_module, GeneratorHelpers.camelize(function_name), Variables])
 
+    created = MapSet.new(Keyword.get(opts, :created_inputs, []))
+
     {field_defs, embed_names, required_names, {_mods, nested_asts, _seen}} =
       Enum.reduce(
         operation.variable_definitions,
-        {[], [], [], {[], [], MapSet.new()}},
+        {[], [], [], {[], [], created}},
         fn var_def, {defs, embeds, reqs, collect_acc} ->
           # An input object this variable pulls in belongs at the variable, so
           # the context each definition is resolved under carries its location.
@@ -310,12 +323,8 @@ defmodule TypedGql.InputTypeGenerator do
          {schema, _scalar_types, _inputs_module, _opts} = context,
          acc
        ) do
-    if GeneratorHelpers.created?(module) do
-      acc
-    else
-      {:ok, type} = Schema.get_type(schema, type_name)
-      collect_module(module, type, context, acc)
-    end
+    {:ok, type} = Schema.get_type(schema, type_name)
+    collect_module(module, type, context, acc)
   end
 
   defp input_module(inputs_module, type_name) do

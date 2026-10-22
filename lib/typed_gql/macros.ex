@@ -373,8 +373,12 @@ defmodule TypedGql.Macros do
                          caller_env: __ENV__,
                          document_base: base,
                          fragments: typed_gql_fragments,
-                         generation_plugins: @typed_gql_generation_plugins
+                         generation_plugins: @typed_gql_generation_plugins,
+                         created_inputs: @typed_gql_input_modules
                        )
+
+      # A later defgql sharing an input type skips the module this one created.
+      @typed_gql_input_modules @typed_gql_input_modules ++ @typed_gql_query.input_modules
 
       unquote(function_ast)
     end
