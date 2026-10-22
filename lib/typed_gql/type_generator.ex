@@ -74,8 +74,7 @@ defmodule TypedGql.TypeGenerator do
   or a single embedded schema when it declares none. Shared fields (outside
   fragments) are merged into each variant's struct. The field holding them is a
   `TypedGql.Types.Union` field that dispatches on `__typename` to the variant
-  modules, typed as the union of their structs; no dispatcher module is
-  generated.
+  modules, typed as the union of their structs.
 
   A member the document does not declare gets no struct, so a response carrying
   one fails to load rather than decoding to a struct that could only hold the
@@ -185,24 +184,15 @@ defmodule TypedGql.TypeGenerator do
 
     type_name = fragment.type_condition.name
 
-    tree =
-      run_pipeline(
-        fragment.selection_set.selections,
-        type_name,
-        base_module,
-        build_context(schema, opts),
-        plugins(opts),
-        Keyword.fetch!(opts, :caller_env),
-        SourceAnchor.loc(fragment)
-      )
-
-    # The union branch emits only the variants, so the naming root gets a module
-    # of its own that names their union — what a caller's typespec refers to.
-    if tree.kind == :union do
-      create_opts = SourceAnchor.create_opts(Keyword.fetch!(opts, :caller_env), tree.loc)
-      type_ast = quote(do: @type(t() :: unquote(variants_type_ast(tree.typename_to_module))))
-      GeneratorHelpers.create_modules([{base_module, type_ast, create_opts}])
-    end
+    run_pipeline(
+      fragment.selection_set.selections,
+      type_name,
+      base_module,
+      build_context(schema, opts),
+      plugins(opts),
+      Keyword.fetch!(opts, :caller_env),
+      SourceAnchor.loc(fragment)
+    )
 
     base_module
   end
@@ -944,6 +934,14 @@ defmodule TypedGql.TypeGenerator do
   # each field's tuple/AST from its Generation.Field, so plugin nullability
   # changes flow through naturally. The triples differ in their create opts: a
   # module records the location of the node it came from, not one shared line.
+  # A union at the root — a fragment on an abstract type — has no field to type,
+  # so its naming root becomes a module defining only `t/0` as its variants'
+  # union. A nested union needs none: its field carries that type itself.
+  defp lower(%GenSchema{kind: :union} = tree, env) do
+    type_ast = quote(do: @type(t() :: unquote(variants_type_ast(tree.typename_to_module))))
+    lower(tree, [{tree.module, type_ast, SourceAnchor.create_opts(env, tree.loc)}], env)
+  end
+
   defp lower(%GenSchema{} = tree, env), do: lower(tree, [], env)
 
   defp lower(%GenSchema{kind: :union} = node, acc, env) do

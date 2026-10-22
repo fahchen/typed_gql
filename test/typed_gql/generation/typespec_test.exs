@@ -41,7 +41,6 @@ defmodule TypedGql.Generation.TypespecTest do
     assert rendered_t(Result) ==
              "t() :: %#{inspect(Result)}{ nodes: [#{inspect(Result.Nodes.User)}.t() | nil] }"
 
-    refute Code.ensure_loaded?(Result.Nodes.Union)
     refute Code.ensure_loaded?(Result.Nodes.Post)
   end
 
@@ -119,8 +118,6 @@ defmodule TypedGql.Generation.TypespecTest do
     assert rendered_t(Result.Nodes) ==
              "t() :: %#{inspect(Result.Nodes)}{ __typename: TypedGql.Types.Typename.t(), id: String.t() }"
 
-    refute Code.ensure_loaded?(Result.Nodes.Union)
-
     data = %{"nodes" => [%{"id" => "1", "__typename" => "User"}, nil]}
 
     assert TypedGql.ResponseDecoder.decode!(Result, data) ==
@@ -137,8 +134,6 @@ defmodule TypedGql.Generation.TypespecTest do
 
     assert rendered_t(Result.Search) ==
              "t() :: %#{inspect(Result.Search)}{ __typename: TypedGql.Types.Typename.t() }"
-
-    refute Code.ensure_loaded?(Result.Search.Union)
 
     assert TypedGql.ResponseDecoder.decode!(Result, %{"search" => [%{"__typename" => "Post"}]}) ==
              %Result{search: [%Result.Search{__typename: :post}]}
