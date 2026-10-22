@@ -30,7 +30,7 @@ defmodule TypedGql.Compiler do
           source: String.t(),
           fragment: Fragment.t(),
           result_module: module(),
-          base: SourceAnchor.base()
+          anchored: Fragment.t()
         }
 
   # Dialyzer cannot trace callers of compile!/3 because it is only invoked
@@ -138,19 +138,22 @@ defmodule TypedGql.Compiler do
   # The two can never disagree about a name: `__resolve_fragments__` appends
   # nothing for a name the query defines itself, so such a name has no
   # registered entry, and a name that does have one is not defined by the query.
+  # The appended copies are dropped before anchoring, which they would only
+  # waste.
   defp generation_fragments(opts, document, base) do
+    registered = anchored_fragments(opts)
+
     document
     |> Document.fragments_by_name()
+    |> Map.drop(Map.keys(registered))
     |> Map.new(fn {name, fragment} -> {name, SourceAnchor.remap(fragment, base)} end)
-    |> Map.merge(anchored_fragments(opts))
+    |> Map.merge(registered)
   end
 
   defp anchored_fragments(opts) do
     opts
     |> Keyword.get(:fragments, %{})
-    |> Map.new(fn {name, entry} ->
-      {name, SourceAnchor.remap(entry.fragment, entry.base)}
-    end)
+    |> Map.new(fn {name, entry} -> {name, entry.anchored} end)
   end
 
   @doc """
@@ -158,7 +161,7 @@ defmodule TypedGql.Compiler do
 
   Parses the fragment, validates it, and generates its result modules under
   `ClientModule.Fragments.FragmentName`. Returns a map with `:source`,
-  `:fragment`, `:result_module` and `:base` keys — see
+  `:fragment`, `:result_module` and `:anchored` keys — see
   `TypedGql.TypeGenerator.generate_fragment/4` for which module
   `:result_module` names.
 
@@ -186,7 +189,6 @@ defmodule TypedGql.Compiler do
     )
 
     client_module = Keyword.fetch!(opts, :client_module)
-    base = Keyword.get(opts, :document_base)
 
     generator_opts = [
       scalar_types: Keyword.get(opts, :scalar_types, %{}),
@@ -199,21 +201,18 @@ defmodule TypedGql.Compiler do
       caller_env: caller_env
     ]
 
+    anchored = SourceAnchor.remap(fragment, Keyword.get(opts, :document_base))
+
     result_module =
-      TypeGenerator.generate_fragment(
-        SourceAnchor.remap(fragment, base),
-        schema,
-        client_module,
-        generator_opts
-      )
+      TypeGenerator.generate_fragment(anchored, schema, client_module, generator_opts)
 
     %{
       source: String.trim(fragment_string),
       fragment: fragment,
       result_module: result_module,
-      # What a later `defgql` needs to place the modules it generates from a
-      # spread of this fragment: its body's lines are this file's, from here.
-      base: base
+      # What a later `defgql` generates from when it spreads this fragment: its
+      # body's lines are this file's already, so no spread remaps it again.
+      anchored: anchored
     }
   end
 
