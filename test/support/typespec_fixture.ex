@@ -49,4 +49,21 @@ defmodule TypedGql.Test.TypespecFixture do
     }
   }
   """)
+
+  defgql(:list_node_types, """
+  query ListNodeTypes($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      id
+      __typename
+    }
+  }
+  """)
+
+  defgql(:search_types, """
+  query SearchTypes($term: String!) {
+    search(query: $term) {
+      __typename
+    }
+  }
+  """)
 end

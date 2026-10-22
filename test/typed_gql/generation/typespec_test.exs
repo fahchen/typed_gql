@@ -58,6 +58,42 @@ defmodule TypedGql.Generation.TypespecTest do
                "TypedGql.Test.TypespecFixture.ListUsersAndPosts.Result.Nodes.User.t()"
   end
 
+  # No fragment declares a member, so an interface field generates one plain
+  # struct of the shared fields and no dispatcher.
+  test "an interface selected without fragments is one plain struct" do
+    alias TypedGql.Test.TypespecFixture.ListNodeTypes.Result
+
+    assert rendered_t(Result) ==
+             "t() :: %#{inspect(Result)}{ nodes: [#{inspect(Result.Nodes)}.t() | nil] }"
+
+    assert rendered_t(Result.Nodes) ==
+             "t() :: %#{inspect(Result.Nodes)}{ __typename: TypedGql.Types.Typename.t(), id: String.t() }"
+
+    refute Code.ensure_loaded?(Result.Nodes.Union)
+
+    data = %{"nodes" => [%{"id" => "1", "__typename" => "User"}, nil]}
+
+    assert TypedGql.ResponseDecoder.decode!(Result, data) ==
+             %Result{nodes: [%Result.Nodes{id: "1", __typename: :user}, nil]}
+  end
+
+  # A union has no fields of its own, so `__typename` is all it can select
+  # without a fragment.
+  test "a union selected without fragments is one plain struct" do
+    alias TypedGql.Test.TypespecFixture.SearchTypes.Result
+
+    assert rendered_t(Result) ==
+             "t() :: %#{inspect(Result)}{ search: Ecto.Schema.embeds_many(#{inspect(Result.Search)}.t()) }"
+
+    assert rendered_t(Result.Search) ==
+             "t() :: %#{inspect(Result.Search)}{ __typename: TypedGql.Types.Typename.t() }"
+
+    refute Code.ensure_loaded?(Result.Search.Union)
+
+    assert TypedGql.ResponseDecoder.decode!(Result, %{"search" => [%{"__typename" => "Post"}]}) ==
+             %Result{search: [%Result.Search{__typename: :post}]}
+  end
+
   defp generated_t(module) do
     {:ok, types} = Code.Typespec.fetch_types(module)
 
