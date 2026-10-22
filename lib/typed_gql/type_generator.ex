@@ -92,7 +92,6 @@ defmodule TypedGql.TypeGenerator do
   alias TypedGql.Validator.Helpers
 
   @builtin_plugins [SkipInclude]
-  @fragment_memo_key {__MODULE__, :fragment_memo}
 
   @type option() ::
           {:client_module, module()}
@@ -218,7 +217,7 @@ defmodule TypedGql.TypeGenerator do
     canonical =
       selections
       |> run_after(plugins, :before_normalize, context)
-      |> normalize_with_fresh_memo(parent_type_name, context)
+      |> normalize(parent_type_name, context)
       |> run_after(plugins, :after_normalize, context)
 
     tree =
@@ -250,17 +249,12 @@ defmodule TypedGql.TypeGenerator do
 
   # ── normalize ──────────────────────────────────────────────────────────
 
-  # The fragment-body memo (see normalized_fragment_body/3) holds for one
-  # pipeline run only: the next compilation on this process may bind the same
-  # fragment name to a different definition.
-  defp normalize_with_fresh_memo(selections, parent_type_name, context) do
-    Process.delete(@fragment_memo_key)
-
-    try do
-      normalize(selections, parent_type_name, context)
-    after
-      Process.delete(@fragment_memo_key)
-    end
+  # The fragment-body memo (see normalized_fragment_body/4) holds for one
+  # pipeline run only: the next compilation may bind the same fragment name to a
+  # different definition.
+  defp normalize(selections, parent_type_name, context) do
+    {normalized, _memo} = normalize(selections, parent_type_name, context, %{})
+    normalized
   end
 
   # Produces canonical selections: fragment spreads expanded, inline fragments
@@ -268,20 +262,21 @@ defmodule TypedGql.TypeGenerator do
   # each field. For union/interface parents, inline fragments are kept (so the
   # resolve step can build per-variant modules) with their directives already
   # propagated onto member fields.
-  defp normalize(selections, parent_type_name, context) do
+  defp normalize(selections, parent_type_name, context, memo) do
     if Schema.abstract?(context.schema, parent_type_name) do
-      normalize_union_selections(selections, parent_type_name, context)
+      normalize_union_selections(selections, parent_type_name, context, memo)
     else
-      normalize_object_selections(selections, parent_type_name, context)
+      normalize_object_selections(selections, parent_type_name, context, memo)
     end
   end
 
-  defp normalize_object_selections(selections, parent_type_name, context) do
-    Enum.flat_map(selections, fn
-      %QueryField{} = field ->
-        [normalize_field(field, parent_type_name, context)]
+  defp normalize_object_selections(selections, parent_type_name, context, memo) do
+    Enum.flat_map_reduce(selections, memo, fn
+      %QueryField{} = field, memo ->
+        {field, memo} = normalize_field(field, parent_type_name, context, memo)
+        {[field], memo}
 
-      %InlineFragment{} = fragment ->
+      %InlineFragment{} = fragment, memo ->
         # Object parents resolve to a single concrete type, so an inline
         # fragment's members merge into the parent (resolved against
         # parent_type_name) rather than producing union variants. Recursing in
@@ -289,81 +284,74 @@ defmodule TypedGql.TypeGenerator do
         # resolve_object/5 requires.
         fragment.selection_set.selections
         |> prepend_directives(fragment.directives)
-        |> normalize(parent_type_name, context)
+        |> normalize(parent_type_name, context, memo)
 
       # The spread's condition applies here (the validator checked it against
       # this very position), so its members merge into the parent exactly as an
       # inline fragment's would.
-      %FragmentSpread{name: name, directives: directives} ->
-        name
-        |> normalized_fragment_body(parent_type_name, context)
-        |> prepend_directives(directives)
+      %FragmentSpread{name: name, directives: directives}, memo ->
+        {body, memo} = normalized_fragment_body(name, parent_type_name, context, memo)
+        {prepend_directives(body, directives), memo}
     end)
   end
 
-  defp normalize_union_selections(selections, parent_type_name, context) do
-    Enum.flat_map(selections, fn
-      %QueryField{} = field ->
-        [normalize_field(field, parent_type_name, context)]
+  defp normalize_union_selections(selections, parent_type_name, context, memo) do
+    Enum.flat_map_reduce(selections, memo, fn
+      %QueryField{} = field, memo ->
+        {field, memo} = normalize_field(field, parent_type_name, context, memo)
+        {[field], memo}
 
-      %InlineFragment{} = fragment ->
-        normalize_union_fragment(fragment, parent_type_name, context)
+      %InlineFragment{} = fragment, memo ->
+        normalize_union_fragment(fragment, parent_type_name, context, memo)
 
-      %FragmentSpread{name: name, directives: directives} ->
-        normalize_union_spread(name, directives, parent_type_name, context)
+      %FragmentSpread{name: name, directives: directives}, memo ->
+        normalize_union_spread(name, directives, parent_type_name, context, memo)
     end)
   end
 
-  # The union-mode mirror of normalize_union_fragment/3, sharing the memoized
+  # The union-mode mirror of normalize_union_fragment/4, sharing the memoized
   # body: a shared condition hoists the members, any other condition keeps the
   # wrapper so resolve_union/5 can build per-variant modules.
-  defp normalize_union_spread(name, directives, parent_type_name, context) do
+  defp normalize_union_spread(name, directives, parent_type_name, context, memo) do
     fragment = fetch_fragment!(name, context)
     condition = fragment.type_condition && fragment.type_condition.name
 
     if shared_condition?(context.schema, condition, parent_type_name) do
-      name
-      |> normalized_fragment_body(parent_type_name, context)
-      |> prepend_directives(directives)
+      {body, memo} = normalized_fragment_body(name, parent_type_name, context, memo)
+      {prepend_directives(body, directives), memo}
     else
-      members =
-        name
-        |> normalized_fragment_body(condition, context)
-        |> prepend_directives(directives)
+      {body, memo} = normalized_fragment_body(name, condition, context, memo)
+      members = prepend_directives(body, directives)
 
-      [
-        %InlineFragment{
-          type_condition: fragment.type_condition,
-          directives: [],
-          selection_set: %{fragment.selection_set | selections: members}
-        }
-      ]
+      wrapper = %InlineFragment{
+        type_condition: fragment.type_condition,
+        directives: [],
+        selection_set: %{fragment.selection_set | selections: members}
+      }
+
+      {[wrapper], memo}
     end
   end
 
-  defp normalize_union_fragment(fragment, parent_type_name, context) do
+  defp normalize_union_fragment(fragment, parent_type_name, context, memo) do
     condition = fragment.type_condition && fragment.type_condition.name
+    selections = prepend_directives(fragment.selection_set.selections, fragment.directives)
 
     if shared_condition?(context.schema, condition, parent_type_name) do
-      fragment.selection_set.selections
-      |> prepend_directives(fragment.directives)
-      |> normalize(parent_type_name, context)
+      normalize(selections, parent_type_name, context, memo)
     else
-      normalized =
-        fragment.selection_set.selections
-        |> prepend_directives(fragment.directives)
-        |> normalize(condition, context)
+      {normalized, memo} = normalize(selections, condition, context, memo)
 
       # The wrapper's directives now live on its members, so clear them: anything
       # left there afterwards was pushed down by a later merge and still has to
       # reach the members — see member_selections/3.
-      [
-        %{
-          fragment
-          | directives: [],
-            selection_set: %{fragment.selection_set | selections: normalized}
-        }
-      ]
+      wrapper = %{
+        fragment
+        | directives: [],
+          selection_set: %{fragment.selection_set | selections: normalized}
+      }
+
+      {[wrapper], memo}
     end
   end
 
@@ -405,17 +393,22 @@ defmodule TypedGql.TypeGenerator do
   # Normalizes a field's own sub-selection set under its child type. A field's
   # own directives are NOT propagated into its sub-selections — only fragment
   # directives propagate to their members.
-  defp normalize_field(%QueryField{selection_set: nil} = field, _parent_type_name, _context),
-    do: field
+  defp normalize_field(
+         %QueryField{selection_set: nil} = field,
+         _parent_type_name,
+         _context,
+         memo
+       ),
+       do: {field, memo}
 
   # child_type is nil only for a field the schema does not declare or whose type
   # it does not define; Rules.Fields rejects both before generation runs. Callers
   # of generate/3 that skip validation get a crash further down either way — the
   # old nil guard here only moved where it happened.
-  defp normalize_field(%QueryField{} = field, parent_type_name, context) do
+  defp normalize_field(%QueryField{} = field, parent_type_name, context, memo) do
     child_type = Helpers.resolve_field_type(context.schema, parent_type_name, field.name)
-    normalized = normalize(field.selection_set.selections, child_type, context)
-    %{field | selection_set: %{field.selection_set | selections: normalized}}
+    {normalized, memo} = normalize(field.selection_set.selections, child_type, context, memo)
+    {%{field | selection_set: %{field.selection_set | selections: normalized}}, memo}
   end
 
   # A fragment's body normalizes the same way at every spread site under the
@@ -426,30 +419,26 @@ defmodule TypedGql.TypeGenerator do
   # equivalent to propagating them through: an object-mode body is flat, and a
   # union-mode wrapper's directives are re-propagated by member_selections/3.
   #
-  # The memo lives in the process dictionary for the span of one pipeline run:
-  # normalization is a deep recursion across a dozen clauses, and threading an
-  # accumulator through every one of them would obscure what it computes.
   # TypedGql.Validator.Rules.Fragments rejects a spread that reaches itself, so
   # the recursion terminates on any document that went through validation.
-  defp normalized_fragment_body(name, parent_type_name, context) do
-    memo = Process.get(@fragment_memo_key, %{})
+  defp normalized_fragment_body(name, parent_type_name, context, memo) do
+    key = {name, parent_type_name}
 
-    with nil <- memo[{name, parent_type_name}] do
-      fragment = fetch_fragment!(name, context)
+    case memo do
+      %{^key => body} ->
+        {body, memo}
 
-      # Merging here, not only at resolve, is what keeps the memo effective: a
-      # flattened body is a concatenation of its spreads' bodies, so without
-      # merging its length doubles per layer even though the elements are shared.
-      body =
-        fragment.selection_set.selections
-        |> normalize(parent_type_name, context)
-        |> merge_fields()
+      %{} ->
+        fragment = fetch_fragment!(name, context)
 
-      # Re-read before writing: the normalize above memoized every nested
-      # fragment, and writing through the map read at entry would drop them.
-      memo = Process.get(@fragment_memo_key, %{})
-      Process.put(@fragment_memo_key, Map.put(memo, {name, parent_type_name}, body))
-      body
+        {normalized, memo} =
+          normalize(fragment.selection_set.selections, parent_type_name, context, memo)
+
+        # Merging here, not only at resolve, is what keeps the memo effective: a
+        # flattened body is a concatenation of its spreads' bodies, so without
+        # merging its length doubles per layer even though the elements are shared.
+        body = merge_fields(normalized)
+        {body, Map.put(memo, key, body)}
     end
   end
 
