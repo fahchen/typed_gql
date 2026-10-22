@@ -195,10 +195,6 @@ defmodule TypedGql.GeneratorHelpers do
     MapSet.member?(Process.get(@created_key, MapSet.new()), module)
   end
 
-  defp record_created(module) do
-    Process.put(@created_key, MapSet.put(Process.get(@created_key, MapSet.new()), module))
-  end
-
   @doc """
   Creates multiple modules from `{module_name, quoted_ast, create_opts}` tuples.
 
@@ -234,7 +230,6 @@ defmodule TypedGql.GeneratorHelpers do
 
   def create_modules(module_asts) do
     create_fn = fn {mod, ast, create_opts} -> Module.create(mod, ast, create_opts) end
-    Enum.each(module_asts, fn {module, _ast, _create_opts} -> record_created(module) end)
 
     try do
       # apply/3 so Elixir 1.15 (no pmap/2) still compiles; the rescue covers both
@@ -250,6 +245,17 @@ defmodule TypedGql.GeneratorHelpers do
       _error in [ArgumentError, MatchError, UndefinedFunctionError] ->
         Enum.each(module_asts, create_fn)
     end
+
+    # Recorded once every module exists: a creation that raised leaves nothing
+    # claiming it was done.
+    record_created(Enum.map(module_asts, fn {module, _ast, _create_opts} -> module end))
+  end
+
+  defp record_created(modules) do
+    Process.put(
+      @created_key,
+      MapSet.union(Process.get(@created_key, MapSet.new()), MapSet.new(modules))
+    )
 
     :ok
   end
