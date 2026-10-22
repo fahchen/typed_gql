@@ -13,6 +13,12 @@ defmodule TypedGql.GeneratorHelpersTest do
   alias TypedGql.GeneratorHelpers
 
   describe "enum_type_ast/2" do
+    # "NIL" underscores to :nil, which is nil: a fold seeded with nil used to
+    # take it for "nothing yet" and drop it.
+    test "keeps a value that underscores to nil" do
+      assert {:|, [], [:open, nil]} = GeneratorHelpers.enum_type_ast(["OPEN", "NIL"])
+    end
+
     test "single value returns bare atom" do
       assert :open = GeneratorHelpers.enum_type_ast(["OPEN"])
     end

@@ -105,10 +105,9 @@ defmodule TypedGql.GeneratorHelpers do
   """
   @spec union_type_ast([Macro.t(), ...]) :: Macro.t()
   def union_type_ast(types) when types != [] do
-    List.foldr(types, nil, fn
-      type, nil -> type
-      type, acc -> {:|, [], [type, acc]}
-    end)
+    # Folding from the last type keeps the order given, with no sentinel a `nil`
+    # type (an enum value `NIL`) could be mistaken for.
+    types |> Enum.reverse() |> Enum.reduce(&{:|, [], [&1, &2]})
   end
 
   @doc """
