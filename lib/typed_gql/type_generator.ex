@@ -913,28 +913,31 @@ defmodule TypedGql.TypeGenerator do
   # same member — or, failing that, at the condition that first covers it. A
   # member no fragment declares has no variant at all, so every variant has an
   # answer here whenever validation ran; a caller that skipped it falls back to
-  # the field's own location.
+  # the field's own location. So does a member declared only through a named
+  # fragment spread, whose wrapper carries no location of its own.
   defp variant_loc(inline_fragments, type_name, context) do
-    fragments = fragments_below(inline_fragments)
+    fragments = applicable_fragments(inline_fragments, type_name, context)
 
-    fragment =
-      Enum.find(fragments, &(&1.type_condition.name == type_name)) ||
-        Enum.find(fragments, fn %InlineFragment{type_condition: condition} ->
-          type_name in condition_type_names(condition, context)
-        end)
-
-    fragment && SourceAnchor.loc(fragment)
+    Enum.find_value(fragments, &(&1.type_condition.name == type_name && SourceAnchor.loc(&1))) ||
+      Enum.find_value(fragments, &SourceAnchor.loc/1)
   end
 
-  # A member can be named below the condition that covers it —
-  # `... on Node { ... on User { email } }` — and the module belongs at the
-  # fragment that named it rather than at the abstract one above. Only abstract
-  # parents leave anything nested here: normalization flattens the inline
-  # fragments of an object parent into the parent itself.
-  defp fragments_below(selections) do
+  # The fragments that reach `type_name`, depth first. A member can be named
+  # below the condition that covers it — `... on Node { ... on User { email } }`
+  # — and the module belongs at the fragment that named it rather than at the
+  # abstract one above. Only fragments that apply are descended into: in
+  # `... on Named { ... on Node { id } }` the inner Node never reaches a member
+  # Named rules out. Only abstract parents leave anything nested here:
+  # normalization flattens the inline fragments of an object parent into the
+  # parent itself.
+  defp applicable_fragments(selections, type_name, context) do
     Enum.flat_map(selections, fn
       %InlineFragment{} = fragment ->
-        [fragment | fragments_below(fragment.selection_set.selections)]
+        if applies_to?(context.schema, fragment.type_condition.name, type_name) do
+          [fragment | applicable_fragments(fragment.selection_set.selections, type_name, context)]
+        else
+          []
+        end
 
       %QueryField{} ->
         []

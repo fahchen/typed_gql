@@ -74,6 +74,7 @@ defmodule TypedGql.TypeGeneratorTest do
   alias TypedGql.Schema.Field, as: SchemaField
   alias TypedGql.Schema.Type
   alias TypedGql.Schema.TypeRef
+  alias TypedGql.SourceAnchor
   alias TypedGql.Test.SchemaHelper
   alias TypedGql.TypeGenerator
 
@@ -917,6 +918,57 @@ defmodule TypedGql.TypeGeneratorTest do
       assert result.node.status == "ACTIVE"
     end
 
+    # The inner `... on Node` sits under Named, which Post is not, so it never
+    # reaches Post: Post belongs to the top-level `... on Node` that does.
+    test "a variant is not anchored at a fragment an outer condition rules out" do
+      tree =
+        resolved_tree(
+          schema_with_two_interfaces(),
+          """
+          query {
+            search {
+              ... on Named {
+                ... on Node { id }
+              }
+              ... on Node { id }
+            }
+          }
+          """,
+          TypedGql.Test.RuledOutAnchor
+        )
+
+      assert %{line: 3} = variant(tree, "User").loc
+      assert %{line: 6} = variant(tree, "Post").loc
+    end
+
+    # A spread's wrapper carries no location, so a located fragment naming the
+    # same member after it is where the variant belongs.
+    test "a variant declared first by a spread is anchored at a located fragment" do
+      {:ok, %{definitions: [fragment]}} =
+        TypedGql.Parser.parse("fragment UserBits on User { email }")
+
+      operation =
+        located!("""
+        query {
+          search {
+            ...UserBits
+            ... on User { email }
+          }
+        }
+        """)
+
+      TypeGenerator.generate(operation, schema_with_union(),
+        client_module: TypedGql.Test.SpreadFirstAnchor,
+        function_name: :search,
+        fragments: %{"UserBits" => fragment},
+        generation_plugins: [CaptureTreePlugin],
+        caller_env: __ENV__
+      )
+
+      assert_received {:resolved_tree, tree}
+      assert %{line: 4} = variant(tree, "User").loc
+    end
+
     test "single union field (not list) uses field with union type" do
       schema = schema_with_single_union()
 
@@ -1681,7 +1733,7 @@ defmodule TypedGql.TypeGeneratorTest do
   # Helpers
 
   defp resolved_tree(schema, query, client_module) do
-    TypeGenerator.generate(parse!(query), schema,
+    TypeGenerator.generate(located!(query), schema,
       client_module: client_module,
       function_name: :search,
       generation_plugins: [CaptureTreePlugin],
@@ -1700,9 +1752,12 @@ defmodule TypedGql.TypeGeneratorTest do
   end
 
   defp variant_field(tree, type_name, field_name) do
+    tree |> variant(type_name) |> Map.fetch!(:fields) |> Enum.find(&(&1.name == field_name))
+  end
+
+  defp variant(tree, type_name) do
     [union_node] = tree.children
-    variant = Enum.find(union_node.children, &(&1.parent_type == type_name))
-    Enum.find(variant.fields, &(&1.name == field_name))
+    Enum.find(union_node.children, &(&1.parent_type == type_name))
   end
 
   # Asserting the exact field type rather than absence from `__schema__(:embeds)`:
@@ -1722,6 +1777,14 @@ defmodule TypedGql.TypeGeneratorTest do
   defp parse!(query) do
     {:ok, %{definitions: [operation | _rest]}} = TypedGql.Parser.parse(query)
     operation
+  end
+
+  # A node's location counts only once SourceAnchor.remap/2 has made it a file
+  # one; a base at line 0 keeps the document's own line numbers.
+  defp located!(query) do
+    query
+    |> parse!()
+    |> SourceAnchor.remap(%{line: 0, column: 0, continuation_column: 0, file: nil})
   end
 
   defp types_with_non_null_name do
