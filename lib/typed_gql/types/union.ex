@@ -121,28 +121,20 @@ defmodule TypedGql.Types.Union do
   end
 
   # The variants the dispatcher can return, as one union, in sorted order so the
-  # same document renders the same typespec on every compile.
+  # same document renders the same typespec on every compile. The type
+  # generator rejects two typenames sharing a module, so the values are distinct.
   defp variant_types(typename_to_module) do
-    variants =
-      typename_to_module
-      |> Map.values()
-      |> Enum.uniq()
-      |> Enum.sort()
-
-    if variants == [] do
-      raise ArgumentError,
-            "a union dispatcher needs at least one member module: " <>
-              inspect(typename_to_module)
+    if typename_to_module == %{} do
+      raise ArgumentError, "a union dispatcher needs at least one member module"
     end
 
-    # Reversed, so the union reads in sorted order; the head is taken out because
-    # `Enum.reduce/2` would return a one-element list untouched, leaving that
-    # variant named as a bare module instead of its `t/0`.
-    [first | rest] = Enum.reverse(variants)
-
-    Enum.reduce(rest, variant_type(first), fn module, union ->
-      {:|, [], [variant_type(module), union]}
-    end)
+    # `Enum.reduce/2` folds from the head, so sorting descending is what makes
+    # the union read in ascending order.
+    typename_to_module
+    |> Map.values()
+    |> Enum.sort(:desc)
+    |> Enum.map(&variant_type/1)
+    |> Enum.reduce(&{:|, [], [&1, &2]})
   end
 
   defp variant_type(module), do: quote(do: unquote(module).t())

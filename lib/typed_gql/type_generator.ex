@@ -848,8 +848,8 @@ defmodule TypedGql.TypeGenerator do
          context,
          loc
        ) do
-    resolved =
-      Enum.map(declared, fn type_name ->
+    {variants, typename_to_module} =
+      Enum.map_reduce(declared, %{}, fn type_name, typename_to_module ->
         merged_selections =
           shared_fields ++ member_selections(inline_fragments, type_name, context)
 
@@ -863,11 +863,8 @@ defmodule TypedGql.TypeGenerator do
             loc: variant_loc(inline_fragments, type_name, context) || loc
           )
 
-        {type_name, variant_module, variant}
+        {variant, Map.put(typename_to_module, type_name, variant_module)}
       end)
-
-    typename_to_module = Map.new(resolved, fn {name, module, _variant} -> {name, module} end)
-    variants = Enum.map(resolved, fn {_name, _module, variant} -> variant end)
 
     # Union type module names derived from schema at compile time
     # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
