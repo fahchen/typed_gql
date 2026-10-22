@@ -3,7 +3,7 @@ defmodule TypedGql.Integration.QuerySelectingUnionAndInterfaceVariantsViaFragmen
   Union and interface selections whose per-variant inline fragments spread named
   fragments shared across two root fields:
 
-  - both selections lower to generated dispatcher types, one struct module per variant
+  - both selections lower to `TypedGql.Types.Union` fields, one struct module per variant
   - the named fragments are printed once at document level and spread in both variants
   - a list variable serializes as a JSON array
   - union elements cast to their variant structs by `__typename`
@@ -60,14 +60,27 @@ defmodule TypedGql.Integration.QuerySelectingUnionAndInterfaceVariantsViaFragmen
   end
 
   describe "generated shape" do
-    test "union and interface selections lower to generated dispatcher types" do
+    test "union and interface selections lower to the library's union type" do
       result_mod = Client.SiteSearch.Result
 
-      assert {:array, {:parameterized, {Client.SiteSearch.Result.Search.Union, %{}}}} =
+      assert {:array, {:parameterized, {TypedGql.Types.Union, search}}} =
                result_mod.__schema__(:type, :search)
 
-      assert {:array, {:parameterized, {Client.SiteSearch.Result.Nodes.Union, %{}}}} =
+      assert search.typename_to_module == %{
+               "User" => Client.SiteSearch.Result.Search.User,
+               "Post" => Client.SiteSearch.Result.Search.Post
+             }
+
+      assert {:array, {:parameterized, {TypedGql.Types.Union, nodes}}} =
                result_mod.__schema__(:type, :nodes)
+
+      assert nodes.typename_to_module == %{
+               "User" => Client.SiteSearch.Result.Nodes.User,
+               "Post" => Client.SiteSearch.Result.Nodes.Post
+             }
+
+      refute Code.ensure_loaded?(Client.SiteSearch.Result.Search.Union)
+      refute Code.ensure_loaded?(Client.SiteSearch.Result.Nodes.Union)
     end
 
     test "each variant gets its own struct module" do

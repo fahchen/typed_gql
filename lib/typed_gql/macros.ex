@@ -245,10 +245,9 @@ defmodule TypedGql.Macros do
 
   The generated module is an embedded schema for an object type condition,
   and for an interface whose selections are shared by every member. A
-  condition that resolves to per-member selections instead yields the
-  `TypedGql.Types.Union` parameterized type at `Fragments.Name.Union` —
-  not a struct — with the per-member embedded schemas at
-  `Fragments.Name.MemberType`.
+  condition that resolves to per-member selections instead generates the
+  per-member embedded schemas at `Fragments.Name.MemberType`, and
+  `Fragments.Name` only defines `t/0` as their union — not a struct.
 
   ## Examples
 

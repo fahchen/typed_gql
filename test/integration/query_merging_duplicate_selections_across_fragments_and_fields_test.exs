@@ -60,8 +60,13 @@ defmodule TypedGql.Integration.QueryMergingDuplicateSelectionsAcrossFragmentsAnd
     test "the repeated search root field collapses into a single response key" do
       assert Client.MergedSearch.Result.__schema__(:fields) == [:search]
 
-      assert {:array, {:parameterized, {Client.MergedSearch.Result.Search.Union, %{}}}} =
+      assert {:array, {:parameterized, {TypedGql.Types.Union, params}}} =
                Client.MergedSearch.Result.__schema__(:type, :search)
+
+      assert params.typename_to_module == %{
+               "User" => Client.MergedSearch.Result.Search.User,
+               "Post" => Client.MergedSearch.Result.Search.Post
+             }
     end
 
     test "the merged search selection generates both union variant structs" do

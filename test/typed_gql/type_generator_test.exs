@@ -439,10 +439,13 @@ defmodule TypedGql.TypeGeneratorTest do
       assert TypedGql.Test.UnionGrid.Search.Result.Grid.User in modules
       assert TypedGql.Test.UnionGrid.Search.Result.Grid.Post in modules
 
-      assert {:array, {:array, {:parameterized, {union_module, _params}}}} =
+      assert {:array, {:array, {:parameterized, {TypedGql.Types.Union, params}}}} =
                TypedGql.Test.UnionGrid.Search.Result.__schema__(:type, :grid)
 
-      assert union_module == TypedGql.Test.UnionGrid.Search.Result.Grid.Union
+      assert params.typename_to_module == %{
+               "User" => TypedGql.Test.UnionGrid.Search.Result.Grid.User,
+               "Post" => TypedGql.Test.UnionGrid.Search.Result.Grid.Post
+             }
 
       json = %{"grid" => [[%{"__typename" => "User", "email" => "a@b.com"}, nil], nil]}
       result = TypedGql.ResponseDecoder.decode!(TypedGql.Test.UnionGrid.Search.Result, json)
@@ -680,36 +683,32 @@ defmodule TypedGql.TypeGeneratorTest do
       assert :title in post_fields
     end
 
-    test "a member type named Union collides with the dispatcher and is rejected" do
-      schema =
-        update_in(
-          schema_with_union(),
-          [Access.key!(:types)],
-          fn types ->
-            types
-            |> put_in(["SearchResult", Access.key!(:possible_types)], ["User", "Union"])
-            |> Map.put("Union", %Type{
-              kind: :object,
-              name: "Union",
-              fields: %{
-                "id" => %SchemaField{
-                  name: "id",
-                  type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :scalar, name: "ID"}}
-                }
-              }
-            })
-          end
-        )
+    test "two members whose names camelize alike are rejected" do
+      operation =
+        parse!("query { search { __typename ... on Foo_bar { id } ... on FooBar { id } } }")
 
-      operation = parse!("query { search { __typename ... on Union { id } } }")
-
-      assert_raise CompileError, ~r/\(union dispatcher\) and Union both name/, fn ->
-        TypeGenerator.generate(operation, schema,
-          client_module: TypedGql.Test.UnionNameCollision,
+      assert_raise CompileError, ~r/FooBar and Foo_bar both name/, fn ->
+        TypeGenerator.generate(operation, schema_with_union_members(["Foo_bar", "FooBar"]),
+          client_module: TypedGql.Test.VariantNameCollision,
           function_name: :search,
           caller_env: __ENV__
         )
       end
+    end
+
+    # No dispatcher module takes the name any more, so a member may.
+    test "a member type named Union is an ordinary variant" do
+      operation = parse!("query { search { __typename ... on Union { id } } }")
+
+      modules =
+        TypeGenerator.generate(operation, schema_with_union_members(["User", "Union"]),
+          client_module: TypedGql.Test.UnionNamedMember,
+          function_name: :search,
+          caller_env: __ENV__
+        )
+
+      assert TypedGql.Test.UnionNamedMember.Search.Result.Search.Union in modules
+      assert :id in TypedGql.Test.UnionNamedMember.Search.Result.Search.Union.__schema__(:fields)
     end
 
     test "a union selected without inline fragments generates a plain object" do
@@ -772,11 +771,15 @@ defmodule TypedGql.TypeGeneratorTest do
       fields = result_module.__schema__(:fields)
       assert :search in fields
 
-      # A depth-1 list of a union stays one array around the dispatch type.
-      assert {:array, {:parameterized, {union_module, _params}}} =
+      # A depth-1 list of a union stays one array around the dispatch type, which
+      # is the library's own, configured with the variants.
+      assert {:array, {:parameterized, {TypedGql.Types.Union, params}}} =
                result_module.__schema__(:type, :search)
 
-      assert union_module == Module.safe_concat(result_module, "Search.Union")
+      assert params.typename_to_module == %{
+               "User" => Module.safe_concat(result_module, "Search.User"),
+               "Post" => Module.safe_concat(result_module, "Search.Post")
+             }
     end
 
     test "end-to-end decode with union field" do
@@ -1076,7 +1079,7 @@ defmodule TypedGql.TypeGeneratorTest do
 
       json = %{"search" => [%{"__typename" => "Post", "id" => "7"}]}
 
-      # The dispatcher has nothing to send it to, so the response is refused
+      # The union type has no module to load it into, so the response is refused
       # rather than decoded into a struct missing what the member could have.
       assert_raise ArgumentError, ~r/cannot load .*Post/, fn ->
         TypedGql.ResponseDecoder.decode!(TypedGql.Test.PartialUnion.Search.Result, json)
@@ -1756,16 +1759,19 @@ defmodule TypedGql.TypeGeneratorTest do
       assert :email in fields
     end
 
-    test "a fragment on a union points at the dispatching union type" do
+    test "a fragment on a union points at a module naming its variants' union" do
       schema = schema_with_union()
       fragment = parse!("fragment SearchFields on SearchResult { ... on User { email } }")
 
-      assert TypedGql.Test.UnionFrag.Fragments.SearchFields.Union ==
+      assert TypedGql.Test.UnionFrag.Fragments.SearchFields ==
                TypeGenerator.generate_fragment(fragment, schema, TypedGql.Test.UnionFrag,
                  caller_env: __ENV__
                )
 
-      assert Code.ensure_loaded?(TypedGql.Test.UnionFrag.Fragments.SearchFields.Union)
+      # Only a type: there is no struct to load into, and no dispatcher.
+      assert Code.ensure_loaded?(TypedGql.Test.UnionFrag.Fragments.SearchFields)
+      refute function_exported?(TypedGql.Test.UnionFrag.Fragments.SearchFields, :__schema__, 1)
+      refute Code.ensure_loaded?(TypedGql.Test.UnionFrag.Fragments.SearchFields.Union)
       assert :email in TypedGql.Test.UnionFrag.Fragments.SearchFields.User.__schema__(:fields)
     end
 
@@ -2043,6 +2049,30 @@ defmodule TypedGql.TypeGeneratorTest do
         }
       }
     })
+  end
+
+  # schema_with_union/0 whose SearchResult has exactly `names` as members; a name
+  # the base schema lacks becomes an object type with an `id`.
+  defp schema_with_union_members(names) do
+    update_in(schema_with_union(), [Access.key!(:types)], fn types ->
+      names
+      |> Enum.reject(&Map.has_key?(types, &1))
+      |> Map.new(fn name ->
+        {name,
+         %Type{
+           kind: :object,
+           name: name,
+           fields: %{
+             "id" => %SchemaField{
+               name: "id",
+               type: %TypeRef{kind: :non_null, of_type: %TypeRef{kind: :scalar, name: "ID"}}
+             }
+           }
+         }}
+      end)
+      |> Map.merge(types)
+      |> put_in(["SearchResult", Access.key!(:possible_types)], names)
+    end)
   end
 
   defp schema_with_union do

@@ -1,10 +1,11 @@
 # Unions and Interfaces
 
 A field whose type is a union or an interface can return more than one object
-type. TypedGql generates one struct per type the document declares, plus a
-dispatcher that picks the struct from the response's `__typename`. Unions and
-interfaces follow the same rules; the few places they differ are called out
-below.
+type. TypedGql generates one struct per type the document declares, and types
+the field as their union. At decode time the field's `TypedGql.Types.Union`
+type picks the struct from the response's `__typename`; no extra module stands
+between the field and its variants. Unions and interfaces follow the same
+rules; the few places they differ are called out below.
 
 The examples use the GitHub schema in a client named `MyApp.GitHub`; module
 names are shown relative to it.
@@ -32,17 +33,16 @@ defgql :search, ~GQL"""
 ```
 
 `nodes` is a `SearchResultItem` union, so this generates a struct per declared
-member and a dispatcher `Union` between them:
+member, and `nodes` is typed as their union:
 
 ```elixir
 # Search.Result
 @type t() :: %Search.Result{search: Ecto.Schema.embeds_one(Search.Result.Search.t()) | nil}
 
 # Search.Result.Search
-@type t() :: %Search.Result.Search{nodes: [Search.Result.Search.Nodes.Union.t() | nil] | nil}
-
-# Search.Result.Search.Nodes.Union
-@type t() :: Search.Result.Search.Nodes.Repository.t() | Search.Result.Search.Nodes.User.t()
+@type t() :: %Search.Result.Search{
+  nodes: [(Search.Result.Search.Nodes.Repository.t() | Search.Result.Search.Nodes.User.t()) | nil] | nil
+}
 
 # Search.Result.Search.Nodes.User
 @type t() :: %Search.Result.Search.Nodes.User{name: String.t() | nil}
@@ -70,8 +70,10 @@ defgql :owners, ~GQL"""
 ```
 
 ```elixir
-# Owners.Result.Search.Nodes.Union
-@type t() :: Owners.Result.Search.Nodes.Organization.t() | Owners.Result.Search.Nodes.User.t()
+# Owners.Result.Search
+@type t() :: %Owners.Result.Search{
+  nodes: [(Owners.Result.Search.Nodes.Organization.t() | Owners.Result.Search.Nodes.User.t()) | nil] | nil
+}
 
 # Owners.Result.Search.Nodes.Organization
 @type t() :: %Owners.Result.Search.Nodes.Organization{login: String.t()}
@@ -116,10 +118,7 @@ Both declare only `User`, with `id` merged into it:
 
 ```elixir
 # Hoisted.Result
-@type t() :: %Hoisted.Result{node: Hoisted.Result.Node.Union.t() | nil}
-
-# Hoisted.Result.Node.Union
-@type t() :: Hoisted.Result.Node.User.t()
+@type t() :: %Hoisted.Result{node: Hoisted.Result.Node.User.t() | nil}
 
 # Hoisted.Result.Node.User
 @type t() :: %Hoisted.Result.Node.User{id: String.t(), name: String.t() | nil}
@@ -143,7 +142,7 @@ is enough.
 ## Selections that declare nothing
 
 A selection with no fragment that declares a member generates one plain
-embedded schema instead of a dispatcher:
+embedded schema instead of one per member:
 
 ```elixir
 defgql :node_types, ~GQL"""
@@ -177,8 +176,37 @@ result.data.nodes
 `__typename` accepts any possible type of the field, as a snake_cased atom.
 Since no member is declared, no response fails to load for naming one.
 
+## Fragments
+
+A `deffragment` on a union or interface with per-member selections has no
+single struct, so `Fragments.Name` only defines `t/0` as the union of its
+per-member schemas:
+
+```elixir
+deffragment ~GQL"""
+  fragment OwnerBits on SearchResultItem {
+    ... on User {
+      name
+    }
+    ... on Organization {
+      description
+    }
+  }
+"""
+```
+
+```elixir
+# Fragments.OwnerBits
+@type t() :: Fragments.OwnerBits.Organization.t() | Fragments.OwnerBits.User.t()
+
+# Fragments.OwnerBits.User
+@type t() :: %Fragments.OwnerBits.User{name: String.t() | nil}
+
+# Fragments.OwnerBits.Organization
+@type t() :: %Fragments.OwnerBits.Organization{description: String.t() | nil}
+```
+
 ## Typespecs
 
-The dispatcher's `t/0` names the variants it can return, in sorted order, as
-`Search.Result.Search.Nodes.Union` above shows. A field holding the dispatcher
-is typed `Union.t()`, so a result's typespec says which structs can come back.
+A field's type names the variants it can return, in sorted order, so a
+result's typespec says which structs can come back.

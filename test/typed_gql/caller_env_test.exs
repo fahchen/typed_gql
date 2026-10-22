@@ -17,10 +17,7 @@ defmodule TypedGql.CallerEnvTest do
       assert_located(Fixture.GetUser.Variables)
     end
 
-    # The dispatcher used to be created by Types.Union.define/2, which passed
-    # the __ENV__ of union.ex, so every union in every client pointed there.
-    test "a union dispatcher points at its own defgql" do
-      assert_located(Fixture.Search.Result.Search.Union)
+    test "a union variant points at its own defgql" do
       assert_located(Fixture.Search.Result.Search.User)
     end
 

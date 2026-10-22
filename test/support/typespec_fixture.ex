@@ -59,6 +59,38 @@ defmodule TypedGql.Test.TypespecFixture do
   }
   """)
 
+  defgql(:search_users_and_posts, """
+  query SearchUsersAndPosts($term: String!) {
+    search(query: $term) {
+      ... on User {
+        name
+      }
+      ... on Post {
+        title
+      }
+    }
+  }
+  """)
+
+  deffragment("""
+  fragment SearchBits on SearchResult {
+    ... on User {
+      name
+    }
+    ... on Post {
+      title
+    }
+  }
+  """)
+
+  deffragment("""
+  fragment NodeBits on Node {
+    ... on User {
+      name
+    }
+  }
+  """)
+
   defgql(:search_types, """
   query SearchTypes($term: String!) {
     search(query: $term) {

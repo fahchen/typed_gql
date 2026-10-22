@@ -32,30 +32,80 @@ defmodule TypedGql.Generation.TypespecTest do
              "drafts: [TypedGql.Test.TypespecFixture.ListDrafts.Result.Drafts.t() | nil] | nil"
   end
 
-  test "a list of an abstract type carries element nullability too" do
-    rendered = generated_t(TypedGql.Test.TypespecFixture.ListNodes.Result)
+  # nodes is [Node]! — the list itself cannot be null, its elements can. The
+  # document declares `... on User` and nothing else, so an element can only
+  # ever be a User and the field says so: no dispatcher module stands between.
+  test "an interface field is typed as the variant it declares" do
+    alias TypedGql.Test.TypespecFixture.ListNodes.Result
 
-    # nodes is [Node]! — the list itself cannot be null, its elements can.
-    assert rendered =~
-             "nodes: [TypedGql.Test.TypespecFixture.ListNodes.Result.Nodes.Union.t() | nil]"
+    assert rendered_t(Result) ==
+             "t() :: %#{inspect(Result)}{ nodes: [#{inspect(Result.Nodes.User)}.t() | nil] }"
+
+    refute Code.ensure_loaded?(Result.Nodes.Union)
+    refute Code.ensure_loaded?(Result.Nodes.Post)
   end
 
-  # The document declares `... on User` and nothing else, so the dispatcher can
-  # only ever return a User and its type says so.
-  test "a union dispatcher's type is the union of the variants it declares" do
-    rendered = rendered_t(TypedGql.Test.TypespecFixture.ListNodes.Result.Nodes.Union)
+  test "an interface field declaring several members is typed as their union" do
+    alias TypedGql.Test.TypespecFixture.ListUsersAndPosts.Result
 
-    assert rendered == "t() :: TypedGql.Test.TypespecFixture.ListNodes.Result.Nodes.User.t()"
+    assert rendered_t(Result) ==
+             "t() :: %#{inspect(Result)}{ nodes: [ (#{inspect(Result.Nodes.Post)}.t() | " <>
+               "#{inspect(Result.Nodes.User)}.t()) | nil ] }"
 
-    refute Code.ensure_loaded?(TypedGql.Test.TypespecFixture.ListNodes.Result.Nodes.Post)
+    refute Code.ensure_loaded?(Result.Nodes.Union)
+
+    data = %{
+      "nodes" => [
+        %{"__typename" => "User", "name" => "Alice"},
+        %{"__typename" => "Post", "title" => "Hello"},
+        nil
+      ]
+    }
+
+    assert %Result{
+             nodes: [%Result.Nodes.User{name: "Alice"}, %Result.Nodes.Post{title: "Hello"}, nil]
+           } =
+             TypedGql.ResponseDecoder.decode!(Result, data)
   end
 
-  test "a dispatcher names every variant when the document declares more than one" do
-    rendered = rendered_t(TypedGql.Test.TypespecFixture.ListUsersAndPosts.Result.Nodes.Union)
+  test "a union field declaring several members is typed as their union" do
+    alias TypedGql.Test.TypespecFixture.SearchUsersAndPosts.Result
 
-    assert rendered ==
-             "t() :: TypedGql.Test.TypespecFixture.ListUsersAndPosts.Result.Nodes.Post.t() | " <>
-               "TypedGql.Test.TypespecFixture.ListUsersAndPosts.Result.Nodes.User.t()"
+    assert rendered_t(Result) ==
+             "t() :: %#{inspect(Result)}{ search: [ #{inspect(Result.Search.Post)}.t() | " <>
+               "#{inspect(Result.Search.User)}.t() ] }"
+
+    refute Code.ensure_loaded?(Result.Search.Union)
+
+    data = %{
+      "search" => [
+        %{"__typename" => "Post", "title" => "Hello"},
+        %{"__typename" => "User", "name" => "Alice"}
+      ]
+    }
+
+    assert %Result{
+             search: [%Result.Search.Post{title: "Hello"}, %Result.Search.User{name: "Alice"}]
+           } =
+             TypedGql.ResponseDecoder.decode!(Result, data)
+  end
+
+  # A fragment has no field to carry a dispatching type, so its own module only
+  # names the union its per-member schemas make up.
+  test "a fragment on a union names its variants' union" do
+    alias TypedGql.Test.TypespecFixture.Fragments.SearchBits
+
+    assert rendered_t(SearchBits) ==
+             "t() :: #{inspect(SearchBits.Post)}.t() | #{inspect(SearchBits.User)}.t()"
+
+    refute function_exported?(SearchBits, :__schema__, 1)
+  end
+
+  test "a fragment on an interface names the variant it declares" do
+    alias TypedGql.Test.TypespecFixture.Fragments.NodeBits
+
+    assert rendered_t(NodeBits) == "t() :: #{inspect(NodeBits.User)}.t()"
+    refute function_exported?(NodeBits, :__schema__, 1)
   end
 
   # No fragment declares a member, so an interface field generates one plain

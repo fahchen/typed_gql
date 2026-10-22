@@ -1,12 +1,16 @@
 defmodule TypedGql.Types.Union do
   @moduledoc """
-  Dynamic parameterized Ecto Type for GraphQL union/interface types.
+  Parameterized Ecto Type for GraphQL union/interface fields.
 
   Dispatches to the correct embedded schema module based on the
-  `__typename` field in the JSON map.
+  `__typename` field in the JSON map. The field declares its members through
+  the `:typename_to_module` option, a map of GraphQL `__typename` strings to
+  the embedded schema modules that load them:
 
-  The generated module implements `Ecto.ParameterizedType` and uses
-  `embed_as: :dump` so that `Ecto.embedded_load/3` calls `load/3`,
+      field :search, {:array, TypedGql.Types.Union},
+        typename_to_module: %{"User" => Result.Search.User, "Post" => Result.Search.Post}
+
+  It uses `embed_as: :dump` so that `Ecto.embedded_load/3` calls `load/3`,
   which reads `__typename` and delegates to the matched module via
   `Ecto.embedded_load/3`.
 
@@ -19,123 +23,90 @@ defmodule TypedGql.Types.Union do
   semantics, so an already-cast value such as an enum atom is not accepted.
   """
 
-  @doc """
-  The body of a parameterized Ecto Type module for a GraphQL union/interface.
+  use Ecto.ParameterizedType
 
-  Called by the type generator at compile time, which creates the module from
-  it alongside the embedded schemas, so that this one records the caller's
-  source location like the rest. `typename_to_module` maps GraphQL
-  `__typename` strings to their corresponding embedded schema modules; it must
-  name at least one member — a dispatcher with nothing to dispatch to describes
-  no response — and an empty map is rejected.
-  """
-  @spec module_ast(%{String.t() => module()}) :: Macro.t()
-  # Multiple function clauses required by Ecto.ParameterizedType behaviour
-  # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
-  def module_ast(typename_to_module) when is_map(typename_to_module) do
-    quote do
-      use Ecto.ParameterizedType
+  @typedoc "The members a field dispatches to, in both directions."
+  @type params() :: %{
+          typename_to_module: %{String.t() => module()},
+          module_to_typename: %{module() => String.t()}
+        }
 
-      @typename_to_module unquote(Macro.escape(typename_to_module))
-      @module_to_typename unquote(
-                            Macro.escape(
-                              Map.new(typename_to_module, fn {name, mod} -> {mod, name} end)
-                            )
-                          )
+  @impl Ecto.ParameterizedType
+  def init(opts) do
+    typename_to_module = Keyword.fetch!(opts, :typename_to_module)
 
-      # Naming the variants rather than widening to `struct()` is what makes a
-      # result's own typespec readable: the field says `Union.t()`, and this is
-      # what that means.
-      @type t() :: unquote(variant_types(typename_to_module))
+    %{
+      typename_to_module: typename_to_module,
+      module_to_typename: Map.new(typename_to_module, fn {name, module} -> {module, name} end)
+    }
+  end
 
-      @impl Ecto.ParameterizedType
-      def init(_opts), do: %{}
+  @impl Ecto.ParameterizedType
+  def type(_params), do: :map
 
-      @impl Ecto.ParameterizedType
-      def type(_params), do: :map
+  @impl Ecto.ParameterizedType
+  def cast(nil, _params), do: {:ok, nil}
 
-      @impl Ecto.ParameterizedType
-      def cast(nil, _params), do: {:ok, nil}
+  # A struct is also a map, so this clause has to answer for non-members
+  # itself: falling through to `cast(%{} = map, params)` would report them
+  # as a missing `__typename` instead of rejecting them.
+  def cast(%{__struct__: module} = struct, params) do
+    if is_map_key(params.module_to_typename, module), do: {:ok, struct}, else: :error
+  end
 
-      # A struct is also a map, so this clause has to answer for non-members
-      # itself: falling through to `cast(%{} = map, _params)` would report them
-      # as a missing `__typename` instead of rejecting them.
-      def cast(%{__struct__: module} = struct, _params) do
-        if is_map_key(@module_to_typename, module), do: {:ok, struct}, else: :error
-      end
+  def cast(%{} = map, params), do: load(map, nil, params)
+  def cast(_other, _params), do: :error
 
-      def cast(%{} = map, _params) do
-        with {:ok, module} <- resolve_module(map) do
-          {:ok, Ecto.embedded_load(module, map, :json)}
-        end
-      end
+  @impl Ecto.ParameterizedType
+  def load(nil, _loader, _params), do: {:ok, nil}
 
-      def cast(_other, _params), do: :error
-
-      @impl Ecto.ParameterizedType
-      def load(nil, _loader, _params), do: {:ok, nil}
-
-      def load(%{} = map, _loader, _params) do
-        with {:ok, module} <- resolve_module(map) do
-          {:ok, Ecto.embedded_load(module, map, :json)}
-        end
-      end
-
-      def load(_other, _loader, _params), do: :error
-
-      @impl Ecto.ParameterizedType
-      def dump(nil, _dumper, _params), do: {:ok, nil}
-
-      # Delegating to the variant's own dumpers is what makes the result
-      # JSON-encodable: enums become strings and nested embeds become maps.
-      # The struct's module is the variant's identity, so dump writes the
-      # __typename back into the map — the struct itself carries the field only
-      # when the query selected it, and without the key the dumped map could
-      # never be loaded again.
-      def dump(%{__struct__: module} = struct, _dumper, _params) do
-        case @module_to_typename do
-          %{^module => typename} ->
-            {:ok, struct |> Ecto.embedded_dump(:json) |> Map.put(:__typename, typename)}
-
-          _not_a_member ->
-            :error
-        end
-      end
-
-      def dump(_other, _dumper, _params), do: :error
-
-      @impl Ecto.ParameterizedType
-      def embed_as(_format, _params), do: :dump
-
-      defp resolve_module(%{"__typename" => typename}),
-        do: Map.fetch(@typename_to_module, typename)
-
-      # `Ecto.embedded_dump/2` emits atom keys, so a dumped union has to resolve
-      # too. The guard keeps a loaded variant struct, whose `:__typename` is an
-      # atom, out of this clause.
-      defp resolve_module(%{__typename: typename}) when is_binary(typename),
-        do: Map.fetch(@typename_to_module, typename)
-
-      defp resolve_module(_map), do: :error
+  def load(%{} = map, _loader, params) do
+    with {:ok, module} <- resolve_module(map, params) do
+      {:ok, Ecto.embedded_load(module, map, :json)}
     end
   end
 
-  # The variants the dispatcher can return, as one union, in sorted order so the
-  # same document renders the same typespec on every compile. The type
-  # generator rejects two typenames sharing a module, so the values are distinct.
-  defp variant_types(typename_to_module) do
-    if typename_to_module == %{} do
-      raise ArgumentError, "a union dispatcher needs at least one member module"
-    end
+  def load(_other, _loader, _params), do: :error
 
-    # `Enum.reduce/2` folds from the head, so sorting descending is what makes
-    # the union read in ascending order.
-    typename_to_module
-    |> Map.values()
-    |> Enum.sort(:desc)
-    |> Enum.map(&variant_type/1)
-    |> Enum.reduce(&{:|, [], [&1, &2]})
+  @impl Ecto.ParameterizedType
+  def dump(nil, _dumper, _params), do: {:ok, nil}
+
+  # Delegating to the variant's own dumpers is what makes the result
+  # JSON-encodable: enums become strings and nested embeds become maps.
+  # The struct's module is the variant's identity, so dump writes the
+  # __typename back into the map — the struct itself carries the field only
+  # when the query selected it, and without the key the dumped map could
+  # never be loaded again.
+  def dump(%{__struct__: module} = struct, _dumper, params) do
+    case params.module_to_typename do
+      %{^module => typename} ->
+        {:ok, struct |> Ecto.embedded_dump(:json) |> Map.put(:__typename, typename)}
+
+      _not_a_member ->
+        :error
+    end
   end
 
-  defp variant_type(module), do: quote(do: unquote(module).t())
+  def dump(_other, _dumper, _params), do: :error
+
+  @impl Ecto.ParameterizedType
+  def embed_as(_format, _params), do: :dump
+
+  # Ecto prints a parameterized type's params in its load errors; an interface
+  # with hundreds of members would bury the message, so name the typenames only.
+  @impl Ecto.ParameterizedType
+  def format(params) do
+    "#TypedGql.Types.Union<#{params.typename_to_module |> Map.keys() |> Enum.sort() |> Enum.join(" | ")}>"
+  end
+
+  defp resolve_module(%{"__typename" => typename}, params),
+    do: Map.fetch(params.typename_to_module, typename)
+
+  # `Ecto.embedded_dump/2` emits atom keys, so a dumped union has to resolve
+  # too. The guard keeps a loaded variant struct, whose `:__typename` is an
+  # atom, out of this clause.
+  defp resolve_module(%{__typename: typename}, params) when is_binary(typename),
+    do: Map.fetch(params.typename_to_module, typename)
+
+  defp resolve_module(_map, _params), do: :error
 end

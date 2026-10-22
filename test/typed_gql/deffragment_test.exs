@@ -313,7 +313,7 @@ defmodule TypedGql.DeffragmentTest do
     test "the entry points at a module that exists" do
       [entry] = UnionClient.fragments()
 
-      assert entry.result_module == UnionClient.Fragments.SearchFields.Union
+      assert entry.result_module == UnionClient.Fragments.SearchFields
       assert Code.ensure_loaded?(entry.result_module)
     end
 
