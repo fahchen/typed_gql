@@ -135,6 +135,18 @@ defmodule TypedGql.GeneratorHelpersTest do
     end
   end
 
+  describe "embed_typed_opts/2" do
+    test "uses explicit nullability for embeds_one and leaves embeds_many unchanged" do
+      for nullable <- [true, false] do
+        assert GeneratorHelpers.embed_typed_opts(:embeds_one, %{nullable: nullable}) == [
+                 null: nullable
+               ]
+
+        assert GeneratorHelpers.embed_typed_opts(:embeds_many, %{nullable: nullable}) == []
+      end
+    end
+  end
+
   describe "typed opts producers" do
     # nullable_from_opts/1 reads `:typed` with Keyword.get/3 and has no fallback
     # for a non-list, so every producer feeding {:typed, opts} must return one.
