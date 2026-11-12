@@ -707,8 +707,9 @@ defmodule TypedGql.TypeGeneratorTest do
           caller_env: __ENV__
         )
 
-      assert TypedGql.Test.UnionNamedMember.Search.Result.Search.Union in modules
-      assert :id in TypedGql.Test.UnionNamedMember.Search.Result.Search.Union.__schema__(:fields)
+      expected = TypedGql.Test.UnionNamedMember.Search.Result.Search.Union
+      assert module = Enum.find(modules, &(&1 == expected))
+      assert :id in module.__schema__(:fields)
     end
 
     test "a union selected without inline fragments generates a plain object" do
