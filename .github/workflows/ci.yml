@@ -14,7 +14,8 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.lint && 'test (lint)' || format('test ({0}, {1})', matrix.elixir, matrix.otp) }}
+    runs-on: ubuntu-24.04
     env:
       FORCE_COLOR: 1
     strategy:
