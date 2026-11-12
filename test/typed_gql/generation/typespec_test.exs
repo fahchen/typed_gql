@@ -26,8 +26,11 @@ defmodule TypedGql.Generation.TypespecTest do
     refute rendered =~
              "author:Ecto.Schema.embeds_one(#{inspect(Result.User.Posts.Author)}.t())|nil"
 
-    for field <- [:included, :skipped, :conditional] do
-      module = Module.concat(post, Macro.camelize(to_string(field)))
+    for {field, module} <- [
+          included: Result.User.Posts.Included,
+          skipped: Result.User.Posts.Skipped,
+          conditional: Result.User.Posts.Conditional
+        ] do
       assert rendered =~ "#{field}:Ecto.Schema.embeds_one(#{inspect(module)}.t())|nil"
     end
 
@@ -51,11 +54,9 @@ defmodule TypedGql.Generation.TypespecTest do
   end
 
   test "nested input embeds preserve nullability" do
-    alias TypedGql.Test.InputTypespecFixture.Inputs.{
-      CommittableBranch,
-      CreateCommitOnBranchInput,
-      FileChanges
-    }
+    alias TypedGql.Test.InputTypespecFixture.Inputs.CommittableBranch
+    alias TypedGql.Test.InputTypespecFixture.Inputs.CreateCommitOnBranchInput
+    alias TypedGql.Test.InputTypespecFixture.Inputs.FileChanges
 
     rendered = rendered_t(CreateCommitOnBranchInput)
 
