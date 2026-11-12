@@ -32,7 +32,8 @@ defmodule TypedGql.GeneratorHelpers do
   @spec embed_typed_opts(:embeds_one | :embeds_many, TypedGql.TypeMapper.resolve_result()) ::
           keyword()
   def embed_typed_opts(:embeds_one, %{nullable: true}), do: [null: true]
-  def embed_typed_opts(_kind, _resolved), do: []
+  def embed_typed_opts(:embeds_one, %{nullable: false}), do: [null: false]
+  def embed_typed_opts(:embeds_many, _resolved), do: []
 
   @doc """
   Builds extra field opts for enum types (`:values` for `TypedGql.Types.Enum`).

@@ -16,6 +16,57 @@ defmodule TypedGql.Generation.TypespecTest do
     refute rendered =~ "name: String.t() | nil"
   end
 
+  test "object embeds preserve schema and directive nullability" do
+    alias TypedGql.Test.TypespecFixture.EmbedTypes.Result
+    post = Result.User.Posts
+    rendered = post |> rendered_t() |> String.replace(" ", "")
+
+    assert rendered =~ "author:Ecto.Schema.embeds_one(#{inspect(Result.User.Posts.Author)}.t())"
+
+    refute rendered =~
+             "author:Ecto.Schema.embeds_one(#{inspect(Result.User.Posts.Author)}.t())|nil"
+
+    for field <- [:included, :skipped, :conditional] do
+      module = Module.concat(post, Macro.camelize(to_string(field)))
+      assert rendered =~ "#{field}:Ecto.Schema.embeds_one(#{inspect(module)}.t())|nil"
+    end
+
+    assert rendered_t(Result.User) =~
+             "profile: Ecto.Schema.embeds_one(#{inspect(Result.User.Profile)}.t()) | nil"
+
+    nested = Result.User.Posts.Author.Posts |> rendered_t() |> String.replace(" ", "")
+
+    assert nested =~
+             "author:Ecto.Schema.embeds_one(#{inspect(Result.User.Posts.Author.Posts.Author)}.t())"
+
+    refute nested =~
+             "author:Ecto.Schema.embeds_one(#{inspect(Result.User.Posts.Author.Posts.Author)}.t())|nil"
+
+    assert %Result{user: %Result.User{posts: [%{author: %{posts: []}}]}} =
+             TypedGql.ResponseDecoder.decode!(Result, %{
+               "user" => %{"posts" => [%{"author" => %{"posts" => []}}]}
+             })
+
+    assert struct(post).__struct__ == post
+  end
+
+  test "nested input embeds preserve nullability" do
+    alias TypedGql.Test.InputTypespecFixture.Inputs.{
+      CommittableBranch,
+      CreateCommitOnBranchInput,
+      FileChanges
+    }
+
+    rendered = rendered_t(CreateCommitOnBranchInput)
+
+    assert rendered =~ "branch: Ecto.Schema.embeds_one(#{inspect(CommittableBranch)}.t())"
+
+    refute rendered =~
+             "branch: Ecto.Schema.embeds_one(#{inspect(CommittableBranch)}.t()) | nil"
+
+    assert rendered =~ "file_changes: Ecto.Schema.embeds_one(#{inspect(FileChanges)}.t()) | nil"
+  end
+
   test "a [T!]! object list keeps the embeds_many type" do
     rendered = generated_t(TypedGql.Test.TypespecFixture.GetUser.Result.User)
 

@@ -17,6 +17,20 @@ defmodule TypedGql.Test.TypespecFixture do
   }
   """)
 
+  defgql(:embed_types, """
+  query EmbedTypes($id: ID!, $flag: Boolean!) {
+    user(id: $id) {
+      profile { bio }
+      posts {
+        author { posts { author { id } } }
+        included: author @include(if: $flag) { id }
+        skipped: author @skip(if: $flag) { id }
+        ... on Post @include(if: $flag) { conditional: author { id } }
+      }
+    }
+  }
+  """)
+
   defgql(:list_drafts, """
   query ListDrafts {
     drafts {
@@ -96,6 +110,21 @@ defmodule TypedGql.Test.TypespecFixture do
     search(query: $term) {
       __typename
     }
+  }
+  """)
+end
+
+defmodule TypedGql.Test.InputTypespecFixture do
+  @moduledoc false
+  use TypedGql,
+    otp_app: :typed_gql,
+    source: "schemas/github.json",
+    endpoint: "https://api.example.com/graphql",
+    scalars: %{"GitObjectID" => :string}
+
+  defgql(:create_commit, """
+  mutation CreateCommit($input: CreateCommitOnBranchInput!) {
+    createCommitOnBranch(input: $input) { clientMutationId }
   }
   """)
 end
